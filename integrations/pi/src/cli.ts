@@ -5,6 +5,7 @@ import { fresh, hash, load, save, upload, Incomplete } from './core.ts';
 import { run } from './runner.ts';
 import { snapshot } from './workspace.ts';
 import { evaluate, validateAssertions, exitCode, type CaseFile } from './cases.ts';
+import { legacyReason, reasonOf } from './reasons.ts';
 
 const strings=['repo','commit','task','prompt','provider','model','bundle','mode','out','assertions','case','endpoint','auth-path','models-path','max-models','max-tools','timeout-ms','tool-source'];
 const {values,positionals}=parseArgs({allowPositionals:true,options:Object.fromEntries(strings.map(k=>[k,{type:'string' as const}]))});
@@ -31,7 +32,8 @@ async function main() {
     if(caseFile?.version!==1)throw new Error('Unsupported case version');
     validateAssertions(caseFile.assertions);
     bundlePath=path.resolve(path.dirname(file),caseFile.bundle);
-    if(hash(await readFile(bundlePath,'utf8'))!==caseFile.bundleHash)throw new Incomplete('Case source bundle changed');
+    if(hash(await readFile(bundlePath,'utf8'))!==caseFile.bundleHash)
+      throw new Incomplete('用例引用的源回放包已被修改', 'incomplete_recording');
   }
   const parent=command==='record'?undefined:await load(bundlePath??required('bundle'));
   const mode=command==='record'?'record':get('mode')??'regress';
@@ -60,8 +62,14 @@ async function main() {
     const stored=await save(out,b);
     const transport=await upload(stored,get('endpoint')??'http://127.0.0.1:7710');
     const verdict=stored.verdict??(stored.complete&&stored.status==='succeeded'?'passed':stored.complete?'error':'inconclusive');
-    console.log(JSON.stringify({bundle:out,run_id:stored.id,verdict,toolSource:stored.toolSource,reason:stored.reason,results:evaluation?.results,...transport}));
+    // cause 是结构化的判定依据；reason 保留可读文本，旧读者不受影响。
+    const cause=stored.cause ?? (stored.reason ? reasonOf(stored.reason) : undefined);
+    console.log(JSON.stringify({bundle:out,run_id:stored.id,verdict,toolSource:stored.toolSource,cause,reason:stored.reason,results:evaluation?.results,...transport}));
     process.exitCode=exitCode(verdict);
   }
 }
-main().catch(e=>{console.log(JSON.stringify({verdict:e instanceof Incomplete?'inconclusive':'error',reason:String(e)}));process.exitCode=e instanceof Incomplete?2:3;});
+main().catch(e=>{
+  const parsed=e instanceof Incomplete?e.cause:legacyReason(String(e));
+  console.log(JSON.stringify({verdict:e instanceof Incomplete?'inconclusive':'error',cause:parsed,reason:String(e)}));
+  process.exitCode=e instanceof Incomplete?2:3;
+});

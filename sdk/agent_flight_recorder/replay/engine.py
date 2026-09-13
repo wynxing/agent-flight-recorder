@@ -27,6 +27,7 @@ from ..models import (
 )
 from .effects import RecordedEffects, RecordedModelResponse, RecordedToolResult
 from .fork import Fork, behavioral_steps, classify_step
+from .reasons import InconclusiveCode, InconclusiveReason
 
 
 class ReplayExhaustedError(RuntimeError):
@@ -35,6 +36,57 @@ class ReplayExhaustedError(RuntimeError):
     这通常意味着被观测的 Agent 行为已经和当初不同（例如模型换了版本、
     工具返回了不同的结果）。对调试来说这是一条有用的信息，不应该被静默吞掉。
     """
+
+    #: 成因码。基类不给默认值，因此“没有成因”在类型上就写不出来。
+    code: str = InconclusiveCode.UNKNOWN.value
+    #: 给人看的具体信息（哪个工具、哪一步、缺了什么）。散文只放这里。
+    detail: str = ""
+
+    def __init__(self, detail: Any = "", *, code: str | None = None) -> None:
+        # detail 可以是一段说明，也可以是一个已经结构化的成因（引擎内部沿用同一条路径）。
+        if isinstance(detail, InconclusiveReason):
+            self.code = detail.code
+            self.detail = detail.detail
+        else:
+            if code is not None:
+                self.code = code
+            self.detail = str(detail)
+        super().__init__(self.cause.to_text())
+
+    @property
+    def cause(self) -> InconclusiveReason:
+        """结构化成因。调用方判定用 ``cause.code``，不要解析异常文本。"""
+
+        return InconclusiveReason.from_code(self.code, self.detail)
+
+
+class IncompleteReplay(ReplayExhaustedError):
+    """录制质量不足，无法给出可信结论。
+
+    升级为独立类型，是为了能把它与下面这些**成因完全不同**的情况区分开：
+
+    * :class:`ReplayDivergence` —— 录制是完整的，但这次回放走不到原来的轨迹上；
+    * :class:`SideEffectBlocked` —— 执行被策略拦下，这次执行本来就没有真实发生。
+
+    后两者都不是“录制不完整”，因此不能用同一个码，也不能合成同一个 inconclusive。
+    """
+
+    code = InconclusiveCode.INCOMPLETE_RECORDING.value
+
+
+class ReplayDivergence(ReplayExhaustedError):
+    """录制完整，但这次回放偏离了原始轨迹（例如模型上下文变化、结论不同）。"""
+
+    code = InconclusiveCode.MODEL_CONTEXT_CHANGED.value
+
+
+class SideEffectBlocked(ReplayExhaustedError):
+    """副作用被闸门拦截：这次执行本来就没有真实发生。
+
+    这是安全策略正常生效的结果，不是录制缺陷，也不是“结论不通过”。
+    """
+
+    code = InconclusiveCode.SIDE_EFFECT_BLOCKED.value
 
 
 class ReplayOverrides(BaseModel):
@@ -101,7 +153,11 @@ class ReplayResult(BaseModel):
     final_output: Any = None
     error: str | None = None
     complete: bool = True
-    reason: str | None = None
+    #: 结构化成因。``None`` 表示这次回放给出了结论；非 ``None`` 时一定是
+    #: ``{code, detail}``，不再是一个自由字符串。
+    reason: InconclusiveReason | None = None
+    #: 旧载荷里自由文本 reason 的原文，仅在做历史兼容解析时保留。
+    legacy_reason: str | None = None
 
 
 class ReplaySession:
@@ -127,22 +183,46 @@ class ReplaySession:
         self.first_fork: Fork | None = None
         self.forks: list[Fork] = []
         self.steps: list[StepPlan] = []
-        self.incomplete_reason: str | None = None
+        #: 已判定的成因（结构化的）。一旦置上，后续步骤不再解析。
+        self.incomplete_reason: InconclusiveReason | None = None
 
     def validate_recording(self) -> None:
+        """录制质量预检：证据不足就显式给出成因，而不是跑出一个看似合理的结论。
+
+        每一条边界的成因码是独立的（边界是不是缺失、seq 有没有缺口、是否被截断，
+        本来就是三件不同的事，控制台给出的下一步也不同）。
+        """
+
         events = self.parent_events
-        if (not events or events[0].type is not EventType.RUN_STARTED
-                or events[-1].type is not EventType.RUN_FINISHED
-                or [e.seq for e in events] != list(range(1, len(events) + 1))):
-            raise ReplayExhaustedError("incomplete_recording: missing boundary or event sequence gap")
+        if not events:
+            raise ReplayExhaustedError("父 Run 没有任何事件，无从对齐", code=InconclusiveCode.INCOMPLETE_RECORDING.value)
+        if events[0].type is not EventType.RUN_STARTED or events[-1].type is not EventType.RUN_FINISHED:
+            raise ReplayExhaustedError(
+                "父 Run 缺少 run_started / run_finished 边界",
+                code=InconclusiveCode.INCOMPLETE_RECORDING.value,
+            )
+        if [e.seq for e in events] != list(range(1, len(events) + 1)):
+            raise ReplayExhaustedError(
+                "父 Run 的事件 seq 不连续，说明中间丢过事件",
+                code=InconclusiveCode.EVENT_SEQUENCE_GAP.value,
+            )
         if self.parent_run.redactions or any(e.redactions for e in events):
-            raise ReplayExhaustedError("redacted_replay_data")
+            raise ReplayExhaustedError(
+                "父 Run 或事件发生过脱敏，证据不再逐字可比",
+                code=InconclusiveCode.REDACTED_REPLAY_DATA.value,
+            )
         if self.parent_run.metadata.get("afr_recording", {}).get("complete") is False:
-            raise ReplayExhaustedError("recording_loss")
+            raise ReplayExhaustedError(
+                "录制方声明本次录制丢过事件（metadata.afr_recording.complete = false）",
+                code=InconclusiveCode.RECORDING_LOSS.value,
+            )
         for event in events:
             data = event.input or {}
             if event.type is EventType.MODEL_CALL and data.get("message_count", 0) > len(data.get("messages", [])):
-                raise ReplayExhaustedError("unsupported_context: truncated messages")
+                raise ReplayExhaustedError(
+                    "模型输入的消息条数被截断：录制只保留了最近的消息",
+                    code=InconclusiveCode.TRUNCATED_CONTEXT.value,
+                )
 
     # ------------------------------------------------------------------ 父 Run
 
@@ -219,8 +299,8 @@ class ReplaySession:
         response = self.effects.model_response_at(parent_seq)
         if response is None:
             raise ReplayExhaustedError(
-                f"父 Run 没有可用于复现的模型输出（parent_seq={parent_seq}）。"
-                "回放已偏离原始轨迹，请改用回归模式让模型真实执行。"
+                f"父 Run 没有可用于复现的模型输出（parent_seq={parent_seq}）",
+                code=InconclusiveCode.MISSING_RECORDED_RESPONSE.value,
             )
         return response
 
@@ -236,6 +316,16 @@ class ReplaySession:
     # ------------------------------------------------------------------ 结果
 
     def to_result(self, **kwargs: Any) -> ReplayResult:
+        """构造结果。``cause`` 是结构化成因；``reason`` 若直接传字符串会按兼容路径解析。"""
+
+        cause = kwargs.pop("cause", None)
+        legacy = kwargs.pop("reason", None)
+        if cause is not None:
+            kwargs["reason"] = InconclusiveReason.from_dict(cause)
+        elif legacy is not None:
+            kwargs["reason"] = InconclusiveReason.from_dict(legacy)
+            if isinstance(legacy, str):
+                kwargs["legacy_reason"] = legacy
         return ReplayResult(
             parent_run_id=self.plan.parent_run_id,
             from_seq=self.plan.from_seq,
@@ -265,7 +355,8 @@ def ensure_replay_context(
     if (parent_metadata or {}).get("afr_replay_context") == "task_only":
         return
     raise ReplayExhaustedError(
-        "unsupported_context: supply initial_state or explicitly record task_only context"
+        "父 Run 记录了初始 input，但回放既没有拿到 initial_state，也没有 task_only 声明",
+        code=InconclusiveCode.MISSING_INITIAL_STATE.value,
     )
 
 

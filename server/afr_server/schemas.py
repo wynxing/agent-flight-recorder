@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from agent_flight_recorder.models import EffectPolicy, Event, ReplayPreset, RunRecord, RunSummary
+from agent_flight_recorder.replay.reasons import InconclusiveReason
 from pydantic import BaseModel, Field
 
 from .assertions import AssertionResult, AssertionSpec
@@ -91,6 +92,8 @@ class CaseItem(BaseModel):
     last_run_id: str | None = None
     last_run_at: datetime | None = None
     last_results: list[AssertionResult] = Field(default_factory=list)
+    #: 最近一次结论的成因（结构化的 ``{code, detail}``）；结论不是 inconclusive 时为 None。
+    last_cause: InconclusiveReason | None = None
     created_at: datetime | None = None
     source_run: RunRecord | None = None
 
@@ -145,6 +148,10 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         # 前端按本地时间解析，刚跑完的用例会显示成 8 小时前（东八区）。
         last_run_at=aware_utc(row.last_run_at),
         last_results=[AssertionResult.model_validate(item) for item in (row.last_results or [])],
+        # 历史行没有这个字段（或写着旧的自由文本）时走兼容解析，绝不因此报错。
+        last_cause=(
+            InconclusiveReason.from_dict(row.last_cause) if getattr(row, "last_cause", None) else None
+        ),
         created_at=aware_utc(row.created_at),
         source_run=source_run,
     )
@@ -157,6 +164,26 @@ def _preset(value: Any) -> ReplayPreset | None:
         return ReplayPreset(str(value))
     except ValueError:
         return None
+
+
+def replay_meta_to_dict(meta: dict[str, Any] | None) -> dict[str, Any] | None:
+    """把 ``metadata.afr_replay`` 归一化成前端契约。
+
+    兼容只做一次，且做在服务端：历史 Run 的 ``reason`` 是自由字符串（甚至有
+    ``replay_recording_loss`` 这种已经消失的旧名），归一化后恒为
+    ``cause = {code, detail} | null``。控制台因此不需要自己再写一份解析，
+    也就不会出现第三个码表。
+    """
+
+    if not meta:
+        return meta
+    normalized = dict(meta)
+    raw = meta.get("cause") if meta.get("cause") is not None else meta.get("reason")
+    if meta.get("complete") is False:
+        normalized["cause"] = InconclusiveReason.from_dict(raw).model_dump(mode="json")
+    else:
+        normalized["cause"] = None
+    return normalized
 
 
 __all__ = [
@@ -174,4 +201,5 @@ __all__ = [
     "RunListResponse",
     "TimelineResponse",
     "case_to_item",
+    "replay_meta_to_dict",
 ]

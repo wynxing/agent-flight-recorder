@@ -9,6 +9,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { clone, canonical, confined, rejectLinks, worktreeRoot, Incomplete, Tape, modelText, type Bundle, type Step } from './core.ts';
+import { cause } from './reasons.ts';
 
 export interface RunOptions {
   bundle: Bundle; parent?: Bundle; root?: string; authPath?: string; modelsPath?: string;
@@ -73,7 +74,8 @@ export async function run(options: RunOptions): Promise<Bundle> {
   const interrupt = () => { fatal = new Error('cancelled'); aborter.abort(); void session?.abort(); };
   process.once('SIGINT',interrupt);
   try {
-    if (parent && (!parent.complete || parent.piVersion !== b.piVersion)) throw new Incomplete('incomplete_or_incompatible_recording');
+    if (parent && (!parent.complete || parent.piVersion !== b.piVersion))
+      throw new Incomplete('父 Run 不完整，或它与当前 pi 版本不兼容', 'incomplete_recording');
     if (liveTools && !options.root) throw new Error(`${b.mode} with toolSource=${toolSource} requires an isolated repository`);
     // A reproduce run uses an empty runtime directory: it must not read the recorded checkout.
     // One canonical root for the tools and for confinement: a short name or junction
@@ -152,7 +154,8 @@ export async function run(options: RunOptions): Promise<Bundle> {
         try {
           if (b.mode === 'reproduce') {
             const step=all.take('model_call');
-            if (canonical(step.input)!==canonical(input)) throw new Incomplete('model_context_changed');
+            if (canonical(step.input)!==canonical(input))
+              throw new Incomplete('这次回放的模型上下文与录制不一致，无法逐字复现', 'model_context_changed');
             step.source='recorded';
             b.steps.push(step);
             if (!step.output) throw new Error(step.error ?? 'missing_model_response');
@@ -189,17 +192,20 @@ export async function run(options: RunOptions): Promise<Bundle> {
     const last = [...session.agent.state.messages].reverse().find((m:any)=>m.role==='assistant') as any;
     b.final=modelText(last);
     if (last?.stopReason==='error'||last?.stopReason==='aborted') throw new Error(last.errorMessage ?? last.stopReason);
-    if (last?.stopReason==='length') throw new Incomplete('model_output_truncated');
+    if (last?.stopReason==='length') throw new Incomplete('模型输出被长度上限截断', 'truncated_context');
     if (b.mode==='reproduce') {
       all.finish();
-      if (b.final!==parent!.final) throw new Incomplete('final_output_changed');
+      if (b.final!==parent!.final) throw new Incomplete('复现出来的结论与录制不同', 'final_output_changed');
     }
     if (b.mode==='regress' && toolSource==='recorded') toolsTape.finish();
   } catch(e) {
     const err=fatal ?? (e instanceof Error ? e : new Error(String(e)));
+    // reason 保持可读的文本形态（旧读者照常能用）；判定一律走结构化的 cause。
     b.reason=err.message;
     b.complete=!(err instanceof Incomplete);
     b.verdict=err instanceof Incomplete ? 'inconclusive' : 'error';
+    // 成因结构化：码与说明分开，不再把整句散文塞进 reason 充当码。
+    b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);
     b.status=/cancelled|budget_exceeded/.test(err.message) ? 'aborted':'failed';
   } finally {
     clearTimeout(timer);process.off('SIGINT',interrupt);

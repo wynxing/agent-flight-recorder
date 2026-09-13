@@ -176,5 +176,7 @@ Event 是 append-only 的。写入后不再修改。
 ## 6. 实验性完整性元数据
 
 Run 状态枚举不变。`metadata.afr_recording.complete=false` 表示 SDK 已知录制丢失；回放还会检查事件边界、序列缺口和脱敏。
-`metadata.afr_replay` 可包含 `complete`、`reason` 和 `verdict`。用例结论为 passed / failed / inconclusive / error，运行 succeeded 不能单独证明评测通过。
+`metadata.afr_replay` 可包含 `complete`、`reason`、`cause` 和 `verdict`。用例结论为 passed / failed / inconclusive / error，运行 succeeded 不能单独证明评测通过。
+
+`metadata.afr_replay.cause` 是「为什么无法判断」的结构化成因，恒为 `{code, detail}`：`code` 是跨层共享的闭集取值（见 [回放语义](replay-semantics.md) 第 8 节），`detail` 是给人看的说明。`reason` 为兼容字段：新写入时与 `cause` 内容一致，历史数据里可能是自由字符串，服务端读取时归一化。用例侧的同一结构在 `cases.last_cause`；pi 上报时把结构直接放进 `afr_replay.reason`。
 pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器回放并产生新的 parent_run_id。

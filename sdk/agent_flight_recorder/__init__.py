@@ -36,6 +36,13 @@ from .models import (
     summarize_events,
 )
 from .recorder import DoctorReport, Recorder, RecorderStats, doctor, new_id
+from .replay.reasons import (
+    CAUSE_CODES,
+    CAUSE_PRECEDENCE,
+    InconclusiveCode,
+    InconclusiveReason,
+    most_significant,
+)
 from .registry import (
     ENTRY_POINT_GROUP,
     AgentSpec,
@@ -85,6 +92,8 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "AFR_SIDE_EFFECT_ATTR",
+    "CAUSE_CODES",
+    "CAUSE_PRECEDENCE",
     "DEFAULT_ENDPOINT",
     "DoctorReport",
     "ENTRY_POINT_GROUP",
@@ -100,6 +109,8 @@ __all__ = [
     "HttpTransport",
     "IngestRequest",
     "IngestResponse",
+    "InconclusiveCode",
+    "InconclusiveReason",
     "NullTransport",
     "PROTOCOL_VERSION",
     "Recorder",
@@ -124,6 +135,7 @@ __all__ = [
     "message_to_dict",
     "new_id",
     "load_agent_specs",
+    "most_significant",
     "resolve_agent_spec",
     "resolve_side_effect",
     "run_replay",

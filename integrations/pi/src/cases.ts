@@ -1,4 +1,5 @@
 import { canonical, type Bundle, type Verdict } from './core.ts';
+import { cause, type InconclusiveReason } from './reasons.ts';
 
 export interface Assertion { type: string; value?: any; tool?: string; }
 export interface CaseFile { version: 1; bundle: string; bundleHash: string; assertions: Assertion[]; }
@@ -10,9 +11,10 @@ export function validateAssertions(value: unknown): asserts value is Assertion[]
     if (a.type === 'json_claim' && (!a.value?.id || !Array.isArray(a.value.evidence) || !a.value.evidence.length)) throw new Error('json_claim requires id, answer and evidence');
   }
 }
-export function evaluate(b:Bundle, assertions:Assertion[]): {verdict:Verdict; results:{type:string;passed:boolean}[]} {
+export function evaluate(b:Bundle, assertions:Assertion[]): {verdict:Verdict; results:{type:string;passed:boolean}[]; cause?:InconclusiveReason} {
   validateAssertions(assertions);
-  if (!b.complete) return {verdict:'inconclusive',results:[]};
+  // 结论与成因一起给出：只有结论、没有成因是不能接受的。
+  if (!b.complete) return {verdict:'inconclusive',results:[],cause:b.cause ?? cause('unknown', b.reason ?? '')};
   if (b.status!=='succeeded') return {verdict:'error',results:[]};
   const tools=b.steps.filter(s=>s.kind==='tool_call');
   const results=assertions.map(a=>{

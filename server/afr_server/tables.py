@@ -86,5 +86,8 @@ class CaseTable(SQLModel, table=True):
     last_run_id: Optional[str] = None
     last_run_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
     last_results: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    # 结论的成因（结构化的 {code, detail}）。只有 last_status 没有成因的用例，
+    # 用户无从知道该去看录制质量还是副作用策略。
+    last_cause: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
 

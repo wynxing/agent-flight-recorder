@@ -2,9 +2,24 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, lstat, readdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { cause, reasonOf, type InconclusiveCode, type InconclusiveReason } from './reasons.ts';
 
 export type Verdict = 'passed' | 'failed' | 'inconclusive' | 'error';
-export class Incomplete extends Error {}
+export class Incomplete extends Error {
+  /** 成因码：稳定、可判定。 */
+  code: InconclusiveCode;
+  /** 给人看的具体信息。散文只放这里。 */
+  detail: string;
+  constructor(detail = '', code: InconclusiveCode = 'unknown') {
+    super(detail);
+    this.code = code;
+    this.detail = detail;
+  }
+  /** 结构化成因。 */
+  get cause(): InconclusiveReason {
+    return cause(this.code, this.detail);
+  }
+}
 export interface Step {
   kind: 'model_call' | 'tool_call'; name: string; input: any; output?: any;
   error?: string; duration_ms: number;
@@ -18,6 +33,13 @@ export interface Bundle {
   /** recorded: strict tape. snapshot: live read-only tools against the pinned checkout. */
   toolSource?: 'recorded' | 'snapshot';
   steps: Step[]; final: string; complete: boolean; reason?: string;
+  /**
+   * 结构化「无法判断」成因。新写入的包只有它；`reason` 仅保留旧包的原文，
+   * 供向后兼容解析（见 reasonOf）。
+   */
+  cause?: InconclusiveReason;
+  /** 旧包里的自由文本 reason 原文。 */
+  legacyReason?: string;
   status: 'succeeded' | 'failed' | 'aborted'; verdict?: Verdict;
 }
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -34,12 +56,18 @@ export class Tape {
     const step = this.steps[this.cursor];
     if (!step || step.kind !== kind || (name !== undefined && step.name !== name) ||
       (input !== undefined && canonical(step.input) !== canonical(input))) {
-      throw new Incomplete(`no_recording: step ${this.cursor + 1}, ${kind} ${name ?? ''}, args=${canonical(input ?? {})}`);
+      throw new Incomplete(
+        `第 ${this.cursor + 1} 步找不到匹配的录制结果：${kind} ${name ?? ''}, args=${canonical(input ?? {})}`,
+        'missing_recorded_response',
+      );
     }
     this.cursor++;
     return clone(step);
   }
-  finish() { if (this.cursor !== this.steps.length) throw new Incomplete('early_end: unused recorded steps'); }
+  finish() {
+    if (this.cursor !== this.steps.length)
+      throw new Incomplete(`父 Run 还有 ${this.steps.length - this.cursor} 个录制步骤没有被消费`, 'event_sequence_gap');
+  }
   get consumed() { return this.cursor; }
 }
 /**
@@ -143,15 +171,23 @@ export function redact<T>(value: T): { value: T; changed: boolean } {
 }
 export async function save(file: string, bundle: Bundle): Promise<Bundle> {
   const clean = redact(bundle);
-  if (clean.changed) { clean.value.complete = false; clean.value.reason = 'redacted_replay_data'; clean.value.verdict = 'inconclusive'; }
+  if (clean.changed) {
+    clean.value.complete = false;
+    clean.value.cause = cause('redacted_replay_data', '回放包在落盘前命中脱敏规则，证据不再逐字可比');
+    clean.value.verdict = 'inconclusive';
+  }
   await mkdir(path.dirname(path.resolve(file)), { recursive: true });
   await writeFile(file, JSON.stringify(clean.value, null, 2), { mode: 0o600 });
   return clean.value;
 }
 export async function load(file: string): Promise<Bundle> {
   const b = JSON.parse(await readFile(file, 'utf8'));
-  if (b.version !== 1 || !Array.isArray(b.steps) || typeof b.prompt !== 'string' || b.promptHash !== hash(b.prompt)) throw new Incomplete('unsupported_or_corrupt_bundle');
-  if (!b.complete) throw new Incomplete(b.reason ?? 'incomplete_recording');
+  if (b.version !== 1 || !Array.isArray(b.steps) || typeof b.prompt !== 'string' || b.promptHash !== hash(b.prompt))
+    throw new Incomplete('回放包版本或结构不受支持', 'incomplete_recording');
+  if (!b.complete) {
+    const parsed = reasonOf(b.cause ?? b.reason);
+    throw new Incomplete(parsed.detail, parsed.code);
+  }
   return b;
 }
 export function payload(b: Bundle) {
@@ -168,8 +204,9 @@ export function payload(b: Bundle) {
     attributes:{native_usage:s.output?.usage ?? null},
   }))];
   if (b.reason) events.push(event('error',events.length+1,{error:{type:b.verdict==='inconclusive'?'IncompleteReplay':'ExecutionError',message:b.reason}}));
+  const cause = b.cause ?? (b.reason ? reasonOf(b.reason) : undefined);
   events.push(event('run_finished',events.length+1,{started_at:b.ended,output:{result:b.final,status:b.status}}));
-  return {protocol_version:1,sdk:{name:'msee-pi',version:'0.1.0'},run:{id:b.id,agent_name:'pi-code-investigator',status:b.status,model:`${b.provider}/${b.model}`,started_at:b.started,ended_at:b.ended,parent_run_id:b.parent ?? null,replay_from_seq:b.parent ? 1 : null,prompt_version:b.promptHash,labels:{runtime:'pi'},metadata:{runtime:'pi',commit:b.commit,pi_version:b.piVersion,afr_replay:{complete:b.complete,reason:b.reason,verdict:b.verdict}}},events};
+  return {protocol_version:1,sdk:{name:'msee-pi',version:'0.1.0'},run:{id:b.id,agent_name:'pi-code-investigator',status:b.status,model:`${b.provider}/${b.model}`,started_at:b.started,ended_at:b.ended,parent_run_id:b.parent ?? null,replay_from_seq:b.parent ? 1 : null,prompt_version:b.promptHash,labels:{runtime:'pi'},metadata:{runtime:'pi',commit:b.commit,pi_version:b.piVersion,afr_replay:{complete:b.complete,reason:cause,verdict:b.verdict}}},events};
 }
 export function modelText(message:any): string { return (message?.content ?? []).filter((c:any)=>c.type==='text').map((c:any)=>c.text).join('\n'); }
 export async function upload(b:Bundle, endpoint:string) {
