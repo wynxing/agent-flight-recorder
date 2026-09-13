@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, realpath, lstat, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, lstat, readdir } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
 export type Verdict = 'passed' | 'failed' | 'inconclusive' | 'error';
@@ -41,21 +42,80 @@ export class Tape {
   finish() { if (this.cursor !== this.steps.length) throw new Incomplete('early_end: unused recorded steps'); }
   get consumed() { return this.cursor; }
 }
-export async function confined(root: string, requested = '.'): Promise<string> {
-  if (requested.includes('\0')) throw new Error('Invalid path');
-  const base = await realpath(root);
-  const target = path.resolve(base, requested);
-  const relative = path.relative(base, target);
-  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('Path outside repository');
-  let current = base;
-  for (const part of relative.split(path.sep).filter(Boolean)) {
-    current = path.join(current, part);
-    if ((await lstat(current)).isSymbolicLink()) throw new Error('Symlink or junction is not allowed');
+/**
+ * Resolve a path the way the operating system does, so that two spellings of one
+ * directory compare equal. This has to be the OS resolver: an 8.3 short name
+ * (RUNNER~1), a junction or a different case all name the same directory, and any
+ * purely lexical comparison would treat them as different paths.
+ */
+function canonicalPath(target: string): string {
+  try {
+    return realpathSync.native(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new Error('Path does not exist');
+    throw error;
   }
-  const actual = await realpath(target);
-  const rel = path.relative(base, actual);
-  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) throw new Error('Resolved path outside repository');
-  return actual;
+}
+function leavesWorktree(relative: string): boolean {
+  return relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative);
+}
+/**
+ * Resolve the deepest existing ancestor. Containment has to be decided even when the
+ * target itself is missing, otherwise a nonexistent path outside the worktree reports
+ * "does not exist" instead of "outside", which reads like a lookup failure.
+ */
+function resolveExisting(target: string): { real: string; missing: number } {
+  for (let current = target, missing = 0;; missing++) {
+    try {
+      return { real: realpathSync.native(current), missing };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error('Path does not exist');
+    current = parent;
+  }
+}
+/**
+ * The one canonical spelling of a worktree. The native tools are created with this
+ * root and confined() resolves against the same value, so a tool can never be asked
+ * about a path that its own root would consider outside.
+ */
+export function worktreeRoot(root: string): string {
+  return canonicalPath(path.resolve(root));
+}
+export async function confined(root: string, requested = '.'): Promise<string> {
+  if (requested.includes('\0') || requested.split(/[\\/]/).some(part => part.toLowerCase() === '.git'))
+    throw new Error('Invalid repository path');
+  const base = canonicalPath(path.resolve(root));
+  const lexical = path.resolve(base, requested);
+  const relative = path.relative(base, lexical);
+
+  // Reject a link or junction anywhere along the path handed to a native tool. Only
+  // meaningful while the request stays inside the worktree lexically; a request
+  // spelled through an alias is decided by its resolved location below.
+  if (!leavesWorktree(relative)) {
+    let current = base;
+    for (const part of relative.split(path.sep).filter(Boolean)) {
+      current = path.join(current, part);
+      let stat;
+      try {
+        stat = await lstat(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new Error('Path does not exist');
+        throw error;
+      }
+      if (stat.isSymbolicLink()) throw new Error('Symlink or junction is not allowed');
+    }
+  }
+
+  // Containment is decided on the resolved location, never on the spelling. This is
+  // what keeps a path inside the worktree: the value returned is always canonical,
+  // so a short name or a junction cannot smuggle a target past the check below.
+  const { real, missing } = resolveExisting(lexical);
+  if (leavesWorktree(path.relative(base, real))) throw new Error('Path outside repository');
+  if (missing) throw new Error('Path does not exist');
+  return real;
 }
 // Scan trees before native recursive tools: internal links must not escape confinement.
 export async function rejectLinks(root: string): Promise<void> {

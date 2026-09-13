@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, symlink, mkdir } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { fresh, clone, Tape, Incomplete, confined, rejectLinks, redact, payload, save, load } from '../src/core.ts';
+import { fresh, clone, Tape, Incomplete, confined, rejectLinks, worktreeRoot, redact, payload, save, load } from '../src/core.ts';
 import { run, assertNoCommandExecution } from '../src/runner.ts';
 import { evaluate } from '../src/cases.ts';
 import { extractJson, classify } from '../src/audit.ts';
@@ -52,15 +53,64 @@ test('exact tape consumes repeated arguments once and rejects early end',()=>{
   assert.equal(tape.take('tool_call','read',{path:'a'}).output,2);tape.finish();
   assert.throws(()=>tape.take('tool_call','read',{path:'a'}),Incomplete);
 });
-test('path traversal, symlinks and Windows junctions are rejected',async()=>{
+test('confinement rejects escapes and answers on the resolved location',async()=>{
+  // os.tmpdir() can hand back an 8.3 short name (RUNNER~1 on a GitHub runner). Nothing
+  // below asserts a spelling: it asserts where the path really is, so a machine that
+  // spells the same directory differently cannot change the verdict.
   const root=await mkdtemp(path.join(os.tmpdir(),'msee-path-'));
   const outside=await mkdtemp(path.join(os.tmpdir(),'msee-outside-'));
   try {
-    await writeFile(path.join(root,'ok'),'x');assert.equal(await confined(root,'ok'),path.join(root,'ok'));
-    await assert.rejects(confined(root,'../outside'));
+    await writeFile(path.join(root,'ok'),'repository evidence');
+    // Allowed: the returned path is canonical and really points at the same file.
+    const allowed=await confined(root,'ok');
+    assert.equal(allowed,path.join(realpathSync.native(root),'ok'));
+    assert.equal(realpathSync.native(allowed),allowed);
+    assert.equal(await readFile(allowed,'utf8'),'repository evidence');
+    assert.equal(await confined(root,'.'),realpathSync.native(root));
+
+    // Rejected: traversal out of the worktree.
+    await assert.rejects(confined(root,'../outside'),/outside repository/);
+    await assert.rejects(confined(root,path.join(outside,'secret')),/outside repository/);
+    await assert.rejects(confined(root,'sub/../../outside'),/outside repository/);
+
+    // Rejected: a link inside the worktree cannot be traversed, even when it points out.
     await symlink(outside,path.join(root,'escape'),process.platform==='win32'?'junction':'dir');
-    await assert.rejects(confined(root,'escape'));await assert.rejects(rejectLinks(root));
+    await assert.rejects(confined(root,'escape'),/Symlink or junction/);
+    await assert.rejects(confined(root,'escape/secret'),/Symlink or junction/);
+    await assert.rejects(rejectLinks(root),/Symlink or junction/);
+
+    // Rejected: .git is never reachable, however it is spelled.
+    await assert.rejects(confined(root,'.git'),/Invalid repository path/);
+    await assert.rejects(confined(root,'.git/config'),/Invalid repository path/);
+    await assert.rejects(confined(root,'sub/.GIT/config'),/Invalid repository path/);
+
+    // Rejected: a missing path is refused explicitly rather than surfacing a raw ENOENT.
+    await assert.rejects(confined(root,'absent'),/Path does not exist/);
   } finally {await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+});
+test('the same directory is not rejected for being spelled differently',async()=>{
+  // Regression: this is the failure CI caught. A GitHub runner hands out a short name
+  // (RUNNER~1) while the resolver returns the long one (runneradmin), so comparing a
+  // request against the worktree lexically rejected a path that is inside the worktree.
+  const parent=await mkdtemp(path.join(os.tmpdir(),'msee-alias-'));
+  const root=path.join(parent,'repo');
+  const alias=path.join(parent,'shortname');
+  await mkdir(root);
+  await symlink(root,alias,process.platform==='win32'?'junction':'dir');
+  try {
+    await writeFile(path.join(root,'ok'),'repository evidence');
+    const canonical=realpathSync.native(root);
+    assert.equal(realpathSync.native(alias),canonical);
+    // The tools and the confinement check must share one spelling of the worktree.
+    assert.equal(worktreeRoot(alias),worktreeRoot(root));
+    assert.equal(worktreeRoot(root),canonical);
+    // Relative request: the alias and the real name must agree.
+    assert.equal(await confined(alias,'ok'),await confined(root,'ok'));
+    // Absolute request spelled through the alias names the same file inside the worktree.
+    assert.equal(await confined(root,path.join(alias,'ok')),path.join(canonical,'ok'));
+    // And an alias still cannot reach outside the worktree it points at.
+    await assert.rejects(confined(root,path.join(alias,'..','shortname','..','..')),/outside repository/);
+  } finally {await rm(parent,{recursive:true,force:true});}
 });
 test('redacted content cannot be used as a complete recording',async()=>{
   assert.equal(redact({authorization:'test',text:'sk-abcdefghijklmnop'}).changed,true);

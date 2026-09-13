@@ -8,7 +8,7 @@ import {
   ModelRuntime, SessionManager, SettingsManager, type ResourceLoader,
 } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { clone, canonical, confined, rejectLinks, Incomplete, Tape, modelText, type Bundle, type Step } from './core.ts';
+import { clone, canonical, confined, rejectLinks, worktreeRoot, Incomplete, Tape, modelText, type Bundle, type Step } from './core.ts';
 
 export interface RunOptions {
   bundle: Bundle; parent?: Bundle; root?: string; authPath?: string; modelsPath?: string;
@@ -76,7 +76,9 @@ export async function run(options: RunOptions): Promise<Bundle> {
     if (parent && (!parent.complete || parent.piVersion !== b.piVersion)) throw new Incomplete('incomplete_or_incompatible_recording');
     if (liveTools && !options.root) throw new Error(`${b.mode} with toolSource=${toolSource} requires an isolated repository`);
     // A reproduce run uses an empty runtime directory: it must not read the recorded checkout.
-    const cwd = liveTools ? options.root! : scratch;
+    // One canonical root for the tools and for confinement: a short name or junction
+    // must not make the tool root and the resolved path disagree.
+    const cwd = liveTools ? worktreeRoot(options.root!) : scratch;
     if (liveTools) await rejectLinks(cwd);
     if (options.modelsPath) await assertNoCommandExecution(options.modelsPath);
     const runtime = await ModelRuntime.create({authPath: options.authPath ?? path.join(scratch,'auth.json'),
@@ -121,7 +123,9 @@ export async function run(options: RunOptions): Promise<Bundle> {
           return clone(step.output);
         }
         const requested = input.path ?? '.';
-        if (typeof requested !== 'string' || requested.split(/[\\/]/).includes('.git')) throw new Error('Invalid repository path');
+        // The .git policy and path canonicalization both live in confined(), so every
+        // tool path goes through one decision instead of two that can disagree.
+        if (typeof requested !== 'string') throw new Error('Invalid repository path');
         const target = await confined(cwd,requested);
         await rejectLinks(cwd);
         const executeArgs=[...args];executeArgs[1]={...input,path:target};
