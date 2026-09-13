@@ -279,6 +279,72 @@ def test_case_status_is_recorded_when_agent_is_unavailable(client, make_run) -> 
     assert result["last_results"]
 
 
+def test_a_cases_record_is_committed_as_a_whole_not_column_by_column(client, make_run, monkeypatch) -> None:
+    """用例行的「最近一次结论」必须整条落库，不能按列合并。
+
+    批量运行里同一条用例会被多个条件并发执行，两个格子都要写这一行。如果写入是
+    「读出行对象 -> 改属性 -> 让 ORM 只提交与它读到的那份快照相比有变化的列」，那么在
+    对方写过之后才提交的那一方会**漏掉自己没改动的列**：它那份旧快照里恰好已经等于
+    新值的列会被留在原处，于是最终落库的是「A 这次执行的 run_id + B 那次执行的条件」。
+    用例页承诺「最近一次条件」与「最近一次执行」属于同一次执行，这种组合直接违背它
+    （CI 上真实出现过：last_run_id 落在 default 格子，last_condition 却是 grounded）。
+
+    这里不需要真的开线程：并发在这个问题上的本质，就是「提交之前先读到了一份旧快照」。
+    格子 B 在它自己的会话里先把这一行读出来（这正是并发时的读），格子 A 随后写完整条，
+    格子 B 再提交——按列合并的写法此时会漏掉 last_run_id。
+    """
+
+    import contextlib
+
+    from afr_server import cases
+    from afr_server.db import get_engine
+    from afr_server.storage import get_case
+    from agent_flight_recorder.models import ReplayPreset
+    from sqlmodel import Session
+
+    client.post("/v1/ingest", json=make_run())
+    case_id = client.post(
+        "/v1/cases", json={"name": "case", "source_run_id": "run-1", "assertions": []}
+    ).json()["id"]
+
+    # 格子 B 的准备阶段：这一行于是带着 B 的 run_id、且还没有结论。
+    run_b, _, _ = cases._prepare_case_run(case_id, from_seq=1, preset=ReplayPreset.REGRESS)
+
+    # B 在自己的会话里读这一行——并发时，这就是「读在对方写之前」。
+    session_b = Session(get_engine(), expire_on_commit=False)
+    loaded = get_case(session_b, case_id)
+    assert loaded is not None
+    assert loaded.last_run_id == run_b
+    session_b.commit()  # 结束这次读，但保留已经读到的那份快照
+
+    # 格子 A 先跑完，把它那一次执行整条写下去。
+    run_a, _, _ = cases._prepare_case_run(case_id, from_seq=1, preset=ReplayPreset.REPRODUCE)
+    cases._store(case_id, run_a, "failed", [], None, {"prompt": "default"})
+
+    # 格子 B 随后用自己那份快照提交自己的结论。
+    real_scope = cases.session_scope
+
+    @contextlib.contextmanager
+    def b_scope():
+        yield session_b
+        session_b.commit()
+
+    monkeypatch.setattr(cases, "session_scope", b_scope)
+    try:
+        cases._store(case_id, run_b, "passed", [], None, {"prompt": "grounded"})
+    finally:
+        session_b.close()
+        monkeypatch.setattr(cases, "session_scope", real_scope)
+
+    recorded = client.get(f"/v1/cases/{case_id}").json()
+    pair = (recorded["last_run_id"], (recorded["last_condition"] or {}).get("prompt"))
+
+    # 不变量：这一对必须来自同一次执行，不能是两次执行各出一半。
+    assert pair in {(run_a, "default"), (run_b, "grounded")}
+    # B 是最后提交的那一格，因此「最近一次结论」整条都是 B 的。
+    assert pair == (run_b, "grounded")
+
+
 def _await_case(client, case_id: str, timeout: float = 15.0) -> dict:
     import time
 
