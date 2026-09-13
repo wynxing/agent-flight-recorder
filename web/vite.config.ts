@@ -9,6 +9,8 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   server: {
+    // 固定绑定 IPv4，避免 Node 只监听 ::1 时脚本里打印的 127.0.0.1 地址连不上。
+    host: '127.0.0.1',
     port: 5273,
     proxy: {
       '/v1': {
