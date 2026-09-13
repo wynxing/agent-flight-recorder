@@ -1,0 +1,33 @@
+[project]
+name = "agent-flight-recorder"
+version = "0.1.0"
+description = "Agent Flight Recorder SDK — record, replay and debug AI agents like software"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+# 完整的 LangGraph / LangChain 接入。版本刻意锁死：中间件钩子与 ToolCallRequest
+# 的运行时形状由这批包决定，漂移会让录制静默失效。
+langgraph = [
+    "langchain==1.4.0",
+    "langchain-core==1.6.3",
+    "langgraph==1.2.11",
+    # langchain.agents.middleware 只是转发 ToolCallRequest，真正的实现方是 langgraph-prebuilt。
+    # 显式声明并锁版本，避免上游把它移走时只在运行时才炸。
+    "langgraph-prebuilt==1.1.0",
+    "langgraph-checkpoint-sqlite==3.1.1",
+]
+otel = [
+    "opentelemetry-api>=1.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_flight_recorder"]
+
