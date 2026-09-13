@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Python and console checks
+    name: Python, console and pi checks (strict)
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -29,9 +29,6 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-
-      - name: Sync Python dependencies
-        run: uv sync --all-packages
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -46,29 +43,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Install console dependencies
-        working-directory: web
-        run: pnpm install --frozen-lockfile
-
-      - name: Install pi runner dependencies
-        working-directory: integrations/pi
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Typecheck pi runner
-        working-directory: integrations/pi
-        run: npm run typecheck
-
-      - name: Test pi runner
-        working-directory: integrations/pi
-        run: npm test
-
-      - name: Run Python and cross-language tests
-        run: uv run pytest
-
-      - name: Typecheck console
-        working-directory: web
-        run: pnpm run typecheck
-
-      - name: Build console
-        working-directory: web
-        run: pnpm run build
+      # 工具链由上面的 action 装上并走缓存；具体检查交给 scripts/test.ps1，
+      # 让 CI 与本地走同一条代码路径，并用严格模式把任何跳过都判为失败：
+      # 「CI 绿」因此等价于「Python、控制台与 pi 运行器都真的跑过」。
+      - name: Run full verification (strict)
+        run: pwsh scripts/test.ps1 -Strict
