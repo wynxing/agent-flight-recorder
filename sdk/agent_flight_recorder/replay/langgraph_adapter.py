@@ -49,6 +49,7 @@ from .engine import (
     ReplayResult,
     ReplaySession,
     StepPlan,
+    ensure_replay_context,
     plan_summary,
 )
 
@@ -224,14 +225,8 @@ class ReplayMiddleware(AgentMiddleware):
         if plan.mode is EffectMode.RECORDED:
             recorded = self.session.recorded_tool_result(name, args, parent_seq=plan.parent_seq)
             if recorded is None:
-                return self._synthetic_tool_result(
-                    request,
-                    plan,
-                    source=EffectSource.BLOCKED,
-                    text=self._no_recording_text(name, args),
-                    reason="no_recording",
-                    side_effect=side_effect,
-                )
+                self.session.incomplete_reason = self._no_recording_text(name, args)
+                raise ReplayExhaustedError(self.session.incomplete_reason)
             message = to_tool_message(recorded, tool_call.get("id"))
             event = self.recorder.record(
                 EventType.TOOL_CALL,
@@ -439,6 +434,11 @@ def run_replay(
     )
 
     state = initial_state if initial_state is not None else default_initial_state(session)
+    if initial_state is None:
+        # 这是包内自带的 task-only 快捷路径，只有它自己知道状态没有被真正恢复。
+        # 调用方显式给了 initial_state 时不能覆盖这个标记，否则回放的 `afr_replay_context`
+        # 会声称状态就是原始状态。
+        recorder.run.metadata["afr_replay_context"] = "task_only"
     recorder.start(task=session.initial_task, input={"replay": plan_summary(session.plan)})
 
     config: dict[str, Any] = {"recursion_limit": recursion_limit}
@@ -446,11 +446,20 @@ def run_replay(
         config["configurable"] = {"thread_id": thread_id}
 
     try:
+        session.validate_recording()
+        ensure_replay_context(
+            initial_state=initial_state,
+            parent_metadata=session.parent_run.metadata,
+            initial_input=session.initial_input,
+        )
         result = agent.invoke(state, config=config)
+        if session.incomplete_reason:
+            raise ReplayExhaustedError(session.incomplete_reason)
     except ReplayExhaustedError as exc:
         recorder.record_error(exc, reason="replay_exhausted")
         recorder.finish(status=RunStatus.FAILED)
-        return session.to_result(run_id=recorder.run_id, status=RunStatus.FAILED.value, error=str(exc))
+        return session.to_result(run_id=recorder.run_id, status=RunStatus.FAILED.value,
+                                 error=str(exc), complete=False, reason=str(exc))
     except Exception as exc:  # noqa: BLE001 - 回放失败必须产出可诊断的结果
         recorder.record_error(exc)
         recorder.finish(status=RunStatus.FAILED)

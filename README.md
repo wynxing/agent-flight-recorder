@@ -2,6 +2,10 @@
 
 **Replay, debug and evaluate AI agents like software.**
 
+当前重点：面向工具型 Agent 的本地回归调试器。固定历史工具证据，重跑模型决策，将失败变成可执行测试。
+
+新增 [pi 只读代码调查运行器](integrations/pi/README.md)：使用真实 pi coding-agent SDK，支持本地录制包、全程复现、回归与用例。它是独立 TypeScript 适配器，不由 Python 服务端启动，也不提供任意步骤恢复。LangGraph 示例仍用于离线演示。
+
 [![CI](https://github.com/wynxing/agent-flight-recorder/actions/workflows/ci.yml/badge.svg)](https://github.com/wynxing/agent-flight-recorder/actions/workflows/ci.yml)
 
 AI Agent 的黑匣子与可回放调试平台。它要回答的问题不是"如何构建一个 Agent"，而是：
@@ -9,7 +13,7 @@ AI Agent 的黑匣子与可回放调试平台。它要回答的问题不是"如�
 > 当 Agent 执行错误、结果异常或行为不可解释时，如何知道它到底发生了什么，并能够复现、验证和修复问题。
 
 传统软件可以靠日志、断点和单元测试定位问题，但 Agent 的执行链路涉及模型、上下文、外部工具与环境状态，
-同一个输入不保证同一个输出。这个项目要补上的就是这块：把一次执行完整录下来，允许从任意一步重新跑，
+同一个输入不保证同一个输出。这个项目要补上的就是这块：录制受支持的模型与工具边界，在明确的适配范围内重跑，
 并把生产环境里的失败变成可以反复验证的回归用例。
 
 ## 快速开始
@@ -102,7 +106,7 @@ print(doctor("http://127.0.0.1:7710").as_dict())
 
 | 模式 | 模型 | 工具 | 回答的问题 |
 | --- | --- | --- | --- |
-| **复现** | 用录制结果 | 用录制结果 | 它从第几步开始偏离？ |
+| **复现** | 用录制结果 | 用录制结果 | 受支持的行为轨迹能否一致重放？ |
 | **回归** | 真实执行 | 用录制结果 | 改完到底有没有变好？ |
 
 回归模式下工具沿用录制结果不是偷懒：要比较的是 Agent 的推理与决策，如果工具数据同时漂移，两次运行就不可比了。
@@ -114,14 +118,14 @@ by_seq[seq]  >  by_kind[kind]  >  default  >  "recorded"
 ```
 
 单步覆盖永远赢，所以"只让第 7 步真实调模型"是一等能力，不是特例代码。
-另外，分叉点之前的步骤一律按录制复现，不会重新执行前面的工作。
+LangGraph 分叉点之前的模型与工具调用使用录制结果；普通节点代码仍可能重新执行，不等于 checkpoint 恢复。pi 第一轮只支持从任务起点回放。
 
 ### 副作用安全
 
 回放一个 SRE Agent 时，它可能再次删除 Pod、再次发出工单。只读 trace 的可观测性工具不需要回答这个问题，
 因为它们是只读的；本平台会重新执行，所以必须回答。
 
-每个工具声明副作用等级，回放中 `write` 与 `external` 默认被强制降级为 dry_run，返回"本应做什么"的合成结果。
+每个工具声明副作用等级，回放中请求真实执行的 `write` 与 `external` 默认被降级为 dry_run，返回"本应做什么"的合成结果；读取历史结果不触发副作用闸门。
 要真实执行必须同时满足：回放策略显式为 live **且** 打开了 `allow_side_effect_execution`，执行后还会在时间线上留下高可见度的告警标记。
 默认拒绝，显式放行，留痕可查。
 
@@ -142,6 +146,7 @@ by_seq[seq]  >  by_kind[kind]  >  default  >  "recorded"
 | `examples/langgraph_sre_agent/` | 示例 Agent，同时也是回放能力的真实被测对象 |
 | `docs/` | 见下方「文档」一节 |
 | `scripts/` | `dev.ps1` 与 `test.ps1` |
+| `integrations/pi/` | pi SDK 本地运行器、固定提交调查任务、跨语言协议测试 |
 
 数据存放在 `data/afr.db`（SQLite 单文件，已加入 .gitignore）。删掉它就回到全新状态，下次启动会重新播种
 ——包括那条自带的用例，它会重新被建出来并跑成一个失败。
@@ -194,7 +199,12 @@ uv run python -m sre_agent.run --model gpt-5-mini --prompt grounded
 ## 用例与断言
 
 只有确定性断言。引入 LLM Judge 会带进第二个不确定性来源，而当前要证明的是"失败案例可以被稳定复现与验证"。
+评测结论区分 `passed / failed / inconclusive / error`。缺失录制、脱敏或不支持的上下文会阻止可信判断，不应当作断言失败，更不能判通过。行为首次分叉仅表示变化，不自动证明错误或根因。
 一条用例包含：源运行、回放起点、模式、断言集，以及条件标签（模型、Prompt 版本）。
+
+回放拿不到可信结论时不会静默合成：`ReplayResult` 带 `complete` 与 `reason`，
+`ReplayExhaustedError` 是公开的失败语义（见 [回放语义](docs/replay-semantics.md) 第 1 节）。
+录制边界缺失、`seq` 缺口、脱敏、录制丢失、上下文截断与初始状态未恢复都会走到这条路径。
 
 支持的断言类型：`no_error`、`final_output_contains`、`final_output_not_contains`、`final_output_matches`、
 `tool_called`（可带参数匹配）、`tool_not_called`、`tool_sequence_equals`、`max_tool_calls`。

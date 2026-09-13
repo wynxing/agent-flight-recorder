@@ -33,9 +33,6 @@ jobs:
       - name: Sync Python dependencies
         run: uv sync --all-packages
 
-      - name: Run Python tests
-        run: uv run pytest
-
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -52,6 +49,21 @@ jobs:
       - name: Install console dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
+
+      - name: Install pi runner dependencies
+        working-directory: integrations/pi
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Typecheck pi runner
+        working-directory: integrations/pi
+        run: npm run typecheck
+
+      - name: Test pi runner
+        working-directory: integrations/pi
+        run: npm test
+
+      - name: Run Python and cross-language tests
+        run: uv run pytest
 
       - name: Typecheck console
         working-directory: web

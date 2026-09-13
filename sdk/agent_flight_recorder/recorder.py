@@ -250,6 +250,7 @@ class Recorder:
             self.stats.events_recorded += 1
             return event
         except Exception as exc:  # noqa: BLE001 - 录制永远不能打断 Agent
+            self.stats.events_dropped += 1
             self._note_error(exc)
             return None
 
@@ -328,6 +329,10 @@ class Recorder:
             return batch
 
     def _send(self, events: list[Event]) -> bool:
+        self.run.metadata["afr_recording"] = {
+            "complete": self.stats.events_dropped == 0,
+            "events_dropped": self.stats.events_dropped,
+        }
         payload = IngestRequest(
             sdk=SdkInfo(name=SDK_NAME, version=SDK_VERSION),
             run=self.run,

@@ -100,6 +100,8 @@ class ReplayResult(BaseModel):
     steps: list[StepPlan] = Field(default_factory=list)
     final_output: Any = None
     error: str | None = None
+    complete: bool = True
+    reason: str | None = None
 
 
 class ReplaySession:
@@ -125,6 +127,22 @@ class ReplaySession:
         self.first_fork: Fork | None = None
         self.forks: list[Fork] = []
         self.steps: list[StepPlan] = []
+        self.incomplete_reason: str | None = None
+
+    def validate_recording(self) -> None:
+        events = self.parent_events
+        if (not events or events[0].type is not EventType.RUN_STARTED
+                or events[-1].type is not EventType.RUN_FINISHED
+                or [e.seq for e in events] != list(range(1, len(events) + 1))):
+            raise ReplayExhaustedError("incomplete_recording: missing boundary or event sequence gap")
+        if self.parent_run.redactions or any(e.redactions for e in events):
+            raise ReplayExhaustedError("redacted_replay_data")
+        if self.parent_run.metadata.get("afr_recording", {}).get("complete") is False:
+            raise ReplayExhaustedError("recording_loss")
+        for event in events:
+            data = event.input or {}
+            if event.type is EventType.MODEL_CALL and data.get("message_count", 0) > len(data.get("messages", [])):
+                raise ReplayExhaustedError("unsupported_context: truncated messages")
 
     # ------------------------------------------------------------------ 父 Run
 
@@ -155,6 +173,8 @@ class ReplaySession:
         "从第 3 步开始回放"不需要重新执行前两步的代价，也不会引入新的不确定性。
         """
 
+        if self.incomplete_reason:
+            raise ReplayExhaustedError(self.incomplete_reason)
         reference = (
             self.reference_steps[self._cursor]
             if self._cursor < len(self.reference_steps)
@@ -163,8 +183,10 @@ class ReplaySession:
         self._cursor += 1
 
         if reference is None:
-            mode = self.plan.policy.resolve_mode(seq=0, kind=kind)
-            plan = StepPlan(parent_seq=None, mode=mode, reason="beyond_parent_tail")
+            decision = self.plan.policy.resolve(seq=0, kind=kind, side_effect=side_effect)
+            plan = StepPlan(parent_seq=None, mode=decision.mode,
+                            reason=decision.reason or "beyond_parent_tail",
+                            warn=decision.warn, downgraded=decision.downgraded)
         elif reference.seq < self.plan.from_seq:
             plan = StepPlan(parent_seq=reference.seq, mode=EffectMode.RECORDED, reason="before_fork_point")
         else:
@@ -223,6 +245,28 @@ class ReplaySession:
             steps=self.steps,
             **kwargs,
         )
+
+
+def ensure_replay_context(
+    *,
+    initial_state: Any,
+    parent_metadata: dict[str, Any] | None,
+    initial_input: dict[str, Any] | None,
+) -> None:
+    """父 Run 记录了初始 input，就必须把状态真的恢复回来。
+
+    `initial_state` 不是可选优化，而是复现可信度的前提。默认只构造 task 消息的
+    快捷路径必须由录制方显式声明 `afr_replay_context = "task_only"`，否则引擎
+    不会假装状态已被恢复（见 docs/replay-semantics.md 第 1 节）。
+    """
+
+    if initial_state is not None or not initial_input:
+        return
+    if (parent_metadata or {}).get("afr_replay_context") == "task_only":
+        return
+    raise ReplayExhaustedError(
+        "unsupported_context: supply initial_state or explicitly record task_only context"
+    )
 
 
 def plan_summary(plan: ReplayPlan) -> str:

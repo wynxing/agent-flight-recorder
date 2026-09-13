@@ -80,6 +80,7 @@ def run_scenario(
 ) -> str:
     """完整跑一次告警调查并录制。返回 run_id。"""
 
+    recorder.run.metadata["afr_replay_context"] = "task_only"
     recorder.start(task=task, input={"alert": task, "service": "checkout-api"})
 
     agent = build_sre_agent(

@@ -35,8 +35,28 @@ try {
     $npm = if (Get-Command pnpm -ErrorAction SilentlyContinue) { 'pnpm' } else { 'npm' }
     & $npm run build
     if ($LASTEXITCODE -ne 0) { throw '控制台构建失败。' }
+    & $npm run typecheck
+    if ($LASTEXITCODE -ne 0) { throw '控制台类型检查失败。' }
 } finally {
     Pop-Location
+}
+
+$piDir = Join-Path $root 'integrations/pi'
+if (Test-Path $piDir) {
+    if (-not (Test-Path (Join-Path $piDir 'node_modules'))) {
+        Write-Host ''
+        Write-Host '跳过 pi 运行器测试：先在 integrations/pi 执行 npm ci --ignore-scripts。' -ForegroundColor Yellow
+    } else {
+        Write-Host ''
+        Write-Host '== pi 运行器 ==' -ForegroundColor Cyan
+        Push-Location $piDir
+        try {
+            npm run typecheck
+            if ($LASTEXITCODE -ne 0) { throw 'pi 类型检查失败。' }
+            npm test
+            if ($LASTEXITCODE -ne 0) { throw 'pi 契约测试失败。' }
+        } finally { Pop-Location }
+    }
 }
 
 Write-Host ''

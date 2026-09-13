@@ -205,10 +205,14 @@ def _execute(plan, run_id: str, case_id: str, snapshot: dict[str, Any]) -> None:
 
     results = evaluate_assertions(snapshot["assertions"], events, final_output_of(events))
     passed = bool(results) and all(item.passed for item in results) and result.status == "succeeded"
+    incomplete = not result.complete or any(e.effect_source == "blocked" for e in events)
+    verdict = "inconclusive" if incomplete else (
+        "error" if result.status != "succeeded" else ("passed" if passed else "failed")
+    )
     _store(
         case_id,
         run_id,
-        "passed" if passed else "failed",
+        verdict,
         [item.model_dump(mode="json") for item in results],
     )
 

@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from agent_flight_recorder import EffectMode, EffectPolicy, Recorder, RunStatus
-from agent_flight_recorder.replay.engine import ReplayPlan
+from agent_flight_recorder.replay.engine import ReplayPlan, ReplaySession
+from agent_flight_recorder.replay.langgraph_adapter import run_replay
 from afr_server import replay_runner, storage
 from afr_server.db import session_scope
 from afr_server.diff import diff_runs
@@ -277,3 +279,76 @@ def test_agent_spec_declares_exactly_one_seed_case() -> None:
     assert case.system_prompt is None
     assert case.preset is None
     assert case.assertions == [{"type": "final_output_contains", "value": "REDIS_POOL_SIZE"}]
+
+
+class _FakeAgent:
+    """只记录被喂进来的初始状态，不真的跑图。"""
+
+    def __init__(self) -> None:
+        self.invocations: list[Any] = []
+
+    def invoke(self, state: Any, config: Any = None) -> dict[str, Any]:
+        self.invocations.append(state)
+        return {"messages": []}
+
+
+def _parent_without_the_task_only_declaration(afr_db) -> str:
+    """录一次真实场景，然后抹掉录制方的 task_only 声明。
+
+    真实录制会显式声明 context（见 sre_agent.agent.run_scenario），这里要的正是
+    "录制方没说、调用方也没给状态"的那条路径。
+    """
+
+    record_parent("legacy-parent")
+    with session_scope() as session:
+        row = storage.get_run(session, "legacy-parent")
+        metadata = dict(row.meta or {})
+        metadata.pop("afr_replay_context", None)
+        row.meta = metadata
+    return "legacy-parent"
+
+
+def test_replay_refuses_to_guess_the_state_when_the_parent_recorded_one(afr_db) -> None:
+    """父 Run 记了 input，但既没有 initial_state 也没有 task_only 声明时，必须显式失败。
+
+    这是 docs/replay-semantics.md 第 1 节的最后一条边界：引擎不会用默认的 task
+    消息假装状态已经恢复，因为那样复现出来的结论不可信。
+    """
+
+    parent = _parent_without_the_task_only_declaration(afr_db)
+    result = replay_runner.execute_replay(ReplayPlan.reproduce(parent, from_seq=1), "no-context-run")
+
+    assert result.complete is False
+    assert result.reason is not None and "unsupported_context" in result.reason
+    assert result.status == RunStatus.FAILED.value
+
+
+def test_explicit_initial_state_is_not_relabelled_as_task_only(afr_db) -> None:
+    """调用方真的恢复了状态时，回放 Run 不能反过来自称"只跑了 task 消息"。"""
+
+    parent = _parent_without_the_task_only_declaration(afr_db)
+    with session_scope() as session:
+        parent_run_record = storage.run_to_record(storage.get_run(session, parent))
+        parent_events = storage.get_events(session, parent)
+
+    recorder = Recorder(
+        parent_run_record.agent_name,
+        transport=DirectTransport(),
+        flush_interval=0.0,
+        run_id="state-run",
+    )
+    agent = _FakeAgent()
+    session_obj = ReplaySession(
+        ReplayPlan.reproduce(parent, from_seq=1), parent_run_record, parent_events
+    )
+    result = run_replay(
+        session=session_obj,
+        recorder=recorder,
+        agent_factory=lambda **_: agent,
+        initial_state={"messages": []},
+    )
+    recorder.close()
+
+    assert result.complete is True, result.reason
+    assert agent.invocations == [{"messages": []}]
+    assert recorder.run.metadata.get("afr_replay_context") != "task_only"

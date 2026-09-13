@@ -28,6 +28,17 @@ def test_case_can_be_created_from_a_run(client, make_run) -> None:
     assert body["source_run"]["id"] == "run-1"
 
 
+def test_incomplete_execution_cannot_pass_assertions(client, make_run, monkeypatch):
+    from types import SimpleNamespace
+    from afr_server import cases
+    client.post("/v1/ingest", json=make_run())
+    monkeypatch.setattr(cases, "execute_replay", lambda *args: SimpleNamespace(status="succeeded", complete=False))
+    stored = []
+    monkeypatch.setattr(cases, "_store", lambda *args: stored.append(args))
+    cases._execute(None, "run-1", "case", {"assertions": [{"type": "no_error"}]})
+    assert stored[0][2] == "inconclusive"
+
+
 def test_case_creation_requires_existing_run(client, make_run) -> None:
     response = client.post("/v1/cases", json={"name": "x", "source_run_id": "missing"})
     assert response.status_code == 404

@@ -15,6 +15,33 @@
 这条路径必须是确定性的：除了时间戳、ID 与 effect_source（它本身就是用来标注结果
 来源的字段），事件序列与父 Run 的行为内容逐字段一致。
 
+这个保证有明确边界，不满足时回放直接判为**无法判断**（而不是继续跑出一个看似合理的结论）：
+
+- 事件边界或 `seq` 序列不完整；
+- 父 Run 或任一事件发生过脱敏；
+- SDK 已知发生录制丢失（`metadata.afr_recording.complete = false`）；
+- 模型输入被截断（`message_count` 大于实际保存的 messages）；
+- 父 Run 记录了初始 input，但回放既没有把完整 `initial_state` 交给引擎，也没有显式标记 `metadata.afr_replay_context = "task_only"`。
+
+最后一条意味着：`initial_state` 不是"可选的优化"，而是复现可信度的前提。默认只构造 task 消息的快捷路径
+必须由录制方显式声明，否则引擎不会假装状态已被恢复。早期版本录制的 Run 没有这个标记，需要重新录制。
+
+两条元数据的方向不要写反：`afr_replay_context = "task_only"` 写在**父 Run**（录制方）上，
+是录制方对自己录了什么的自述；引擎读的是父 Run 的这个字段。回放 Run 只有在真的走了
+task-only 快捷路径时才带这个标记——调用方显式传了 `initial_state` 时不会被打上，
+否则一次真正恢复了状态的回放会反过来声称自己只跑了 task 消息。
+
+这五类边界各自有测试守着，缺证据时引擎给出结论而不是继续跑：
+
+| 边界 | 测试 |
+| --- | --- |
+| 录制边界缺失 / `seq` 缺口 | `sdk/tests/test_replay_engine.py::test_recording_without_boundaries_is_rejected`、`::test_event_sequence_gap_is_rejected` |
+| 脱敏数据 | `::test_redacted_recording_is_rejected` |
+| 录制丢失标记 | `::test_recording_loss_marker_is_rejected` |
+| 截断上下文 | `::test_truncated_model_input_is_rejected` |
+| 缺少录制结果 | `::test_recorded_model_response_raises_when_missing`、`::test_unmatched_tool_call_returns_none_instead_of_guessing` |
+| 初始状态未被恢复 | `::test_initial_state_is_required_when_the_parent_recorded_one`、`examples/langgraph_sre_agent/tests/test_scenario.py::test_replay_refuses_to_guess_the_state_when_the_parent_recorded_one` |
+
 ### 回归（Regress）
 
 目标：**验证改动是否让结果变好**，回答"改完到底有没有变好、有没有引入新问题"。
@@ -72,6 +99,19 @@ by_seq[seq]  >  by_kind[event_kind]  >  default  >  "recorded"
 回放引擎位于 SDK 内（`agent_flight_recorder.replay`），是框架无关的核心 + 框架适配层。本地 MVP 中由服务端作为宿主调用后台任务执行，这是本地部署的选择，不是架构限制：真实用户可以完全在自己的进程里加载历史 Run 并回放，把结果再上报回平台。
 
 ## 7. 事件来源标注
+
+### 7.1 pi 专用的第三种工具来源：快照重执行
+
+pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snapshot`：只读工具不再消费录制结果，而是在固定提交的工作树上真实执行。
+
+这不是放宽安全要求。允许这么做的前提有两条，缺一不可：
+
+1. 工具集是全只读的（`read` / `grep` / `find` / `ls`），不可能产生副作用；
+2. 目标仓库被固定在某个提交上，证据不会随时间漂移——"两次运行可比"的要求由快照而不是由录制结果来满足。
+
+实测依据：同一批任务用严格重放时 30 个样本里 28 个因为模型换了查询参数而无法判断，改用快照重执行后全部得到明确结论，且没有一个答案是错的。参见 [pi 回归验证记录](pi-validation.md)。
+
+事件来源的读法不变：`live` 表示该步真实执行过。选择快照重执行的回归运行里，工具步骤是 `live`，不是 `recorded`——界面必须照实显示。
 
 每个回放事件的 `effect_source` 说明它的结果从哪来：
 

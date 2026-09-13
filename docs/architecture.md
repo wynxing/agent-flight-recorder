@@ -13,6 +13,13 @@
 
 ## 1. 系统总览
 
+新增 `integrations/pi/` 专用 TypeScript 运行器，使用 pi coding-agent SDK，在独立工作树录制只读调查。
+本地回放包先脱敏落盘，再调用现有 ingest；Python 服务端不加载或执行 Node。pi 用例也在本地执行。
+`run.metadata.runtime = "pi"` 控制界面能力；`afr_replay.complete/reason/verdict` 表达完整性与结论。
+Run 状态保持原有枚举，用例状态增加 `inconclusive`。SQLite 字符串列无需迁移，旧记录无 complete 字段时按旧显示处理。
+
+详见 [pi 运行器](../integrations/pi/README.md)。
+
 ```
 [被测 Agent 进程]
   LangGraph / LangChain Agent
@@ -232,6 +239,9 @@ JSON 列（`input` / `output` / `attributes` / `summary`）存结构化内容；
 **接入一个新的框架**
 
 回放核心（`replay/engine.py`、`replay/effects.py`、`replay/fork.py`）不认识任何框架，只处理事件序列与策略解析。
+录制可信度检查（事件边界、`seq` 缺口、脱敏、录制丢失、上下文截断、初始状态未被恢复）与
+回放上下文的判定（`ensure_replay_context`）都在这层，因此不依赖框架也能被单元测试覆盖；
+适配层只负责据此驱动一次执行。
 新框架需要实现的是一个适配层，职责只有两件：拦截每一步、按计划返回录制结果或真实执行。
 LangGraph 的实现见 `replay/langgraph_adapter.py`，可作为参照。
 
@@ -279,9 +289,9 @@ my-agent = "my_package.agent:agent_spec"
 
 | 项 | 说明 | 影响 |
 | --- | --- | --- |
-| 只有一条框架适配路径经过验证 | 回放核心号称框架无关，但只有 LangGraph 有真实被测对象 | 第二个框架接入时可能发现抽象漏了点东西 |
+| 只有一条框架适配路径经过验证 | 回放核心号称框架无关，但LangGraph 与 pi SDK 有离线契约测试，真实模型结果另见验证记录 | 第二个框架接入时可能发现抽象漏了点东西 |
 | 回放中间状态全在内存 | 超大运行的回放可能吃紧 | 长任务场景需要评估落盘 |
-| 无回放预算上限 | 批量跑用例的 token 花费不受约束 | 财务风险，v1.1 必须补 |
+| Python 路径无统一回放预算上限 | 批量跑用例的 token 花费不受约束 | 财务风险，v1.1 必须补 |
 | Diff 未缓存 | 每次请求重新计算 | 运行很大时响应变慢 |
 | 前端对齐可读性 | 两条运行步骤数差异很大时，对齐结果不易读 | 影响体验，不影响正确性 |
 | 单用户、无鉴权 | 只监听 localhost，无多租户字段 | 生产部署前必须补，属于已知的范围边界而非疏漏 |

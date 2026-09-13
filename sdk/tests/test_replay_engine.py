@@ -17,7 +17,12 @@ from agent_flight_recorder.models import (
     utcnow,
 )
 from agent_flight_recorder.replay.effects import RecordedEffects, args_key
-from agent_flight_recorder.replay.engine import ReplayExhaustedError, ReplayPlan, ReplaySession
+from agent_flight_recorder.replay.engine import (
+    ReplayExhaustedError,
+    ReplayPlan,
+    ReplaySession,
+    ensure_replay_context,
+)
 from agent_flight_recorder.replay.fork import ForkKind, behavioral_steps, classify_step, detect_fork
 
 
@@ -70,8 +75,29 @@ def make_session(plan: ReplayPlan) -> ReplaySession:
     return ReplaySession(plan, parent_run(), parent_events())
 
 
+def expect_exhausted(session: ReplaySession, fragment: str) -> None:
+    try:
+        session.validate_recording()
+    except ReplayExhaustedError as exc:
+        assert fragment in str(exc), str(exc)
+    else:
+        raise AssertionError(f"应当以 {fragment} 拒绝这次回放，而不是继续跑")
+
+
 def test_args_key_ignores_key_order() -> None:
     assert args_key({"b": 1, "a": 2}) == args_key({"a": 2, "b": 1})
+
+
+def test_mutating_step_beyond_parent_tail_uses_gate() -> None:
+    policy = EffectPolicy(default=EffectMode.LIVE)
+    session = ReplaySession(ReplayPlan(parent_run_id="parent", from_seq=1, policy=policy), parent_run(), [])
+    step = session.next_step("tool_call", side_effect=SideEffect.WRITE)
+    assert step.mode == EffectMode.DRY_RUN
+    assert step.warn and step.downgraded
+    policy.allow_side_effect_execution = True
+    step = session.next_step("tool_call", side_effect=SideEffect.EXTERNAL)
+    assert step.mode == EffectMode.LIVE
+    assert step.warn
 
 
 def test_recorded_tool_result_is_found_by_name_and_args() -> None:
@@ -226,3 +252,124 @@ def test_error_events_do_not_shift_step_alignment() -> None:
     events = parent_events()
     events.insert(3, make_event(99, EventType.ERROR, error={"type": "X", "message": "boom"}))
     assert [step.seq for step in behavioral_steps(events)] == [3, 4, 5]
+
+
+# ------------------------------------------------------------------ 显式失败
+#
+# 回放可信度的前提是"拿不到可信结论就显式失败"。下面五类失败各自压一条测试，
+# 与 docs/replay-semantics.md 第 1 节的边界逐条对应：只要录制的证据不足以支撑
+# 复现，引擎必须给出原因，而不是跑出一个看起来合理的结论。
+
+
+def test_recording_without_boundaries_is_rejected() -> None:
+    """父 Run 没有 run_started / run_finished 边界时不能当作可复现的录制。"""
+
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), parent_events()[:-1]),
+        "incomplete_recording",
+    )
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), parent_events()[1:]),
+        "incomplete_recording",
+    )
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), []),
+        "incomplete_recording",
+    )
+
+
+def test_event_sequence_gap_is_rejected() -> None:
+    """seq 不连续说明事件丢过，任何一步都可能对不上，因此必须先拒绝。"""
+
+    events = [event for event in parent_events() if event.seq != 4]
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), events),
+        "incomplete_recording",
+    )
+
+
+def test_redacted_recording_is_rejected() -> None:
+    """发生过脱敏就意味着证据不再逐字可比，复现结论会失真。"""
+
+    events = parent_events()
+    events[2].redactions = ["openai_api_key"]
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), events),
+        "redacted_replay_data",
+    )
+
+    redacted_run = parent_run()
+    redacted_run.redactions = ["authorization"]
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), redacted_run, parent_events()),
+        "redacted_replay_data",
+    )
+
+
+def test_recording_loss_marker_is_rejected() -> None:
+    """SDK 自己声明录制丢过事件时，父 Run 的证据就是不完整的。"""
+
+    run = parent_run()
+    run.metadata["afr_recording"] = {"complete": False, "events_dropped": 2}
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), run, parent_events()),
+        "recording_loss",
+    )
+
+
+def test_truncated_model_input_is_rejected() -> None:
+    """message_count 大于实际保存的 messages，说明喂给模型的上下文被截断了。"""
+
+    events = parent_events()
+    events[2].input = {"messages": [{"role": "human", "content": "only one"}], "message_count": 30}
+    expect_exhausted(
+        ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), events),
+        "unsupported_context",
+    )
+
+
+def test_exhausted_recording_stops_later_steps() -> None:
+    """验证过的失败必须真的拦住后续步骤，而不是只在开头记一笔。"""
+
+    session = ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), parent_events())
+    session.incomplete_reason = "recording_loss"
+    try:
+        session.next_step(EventType.MODEL_CALL.value)
+    except ReplayExhaustedError as exc:
+        assert "recording_loss" in str(exc)
+    else:
+        raise AssertionError("盘面已经判为不完整，就不该继续解析步骤")
+
+
+def test_initial_state_is_required_when_the_parent_recorded_one() -> None:
+    """父 Run 记了初始 input，引擎不会假装状态已经恢复。"""
+
+    try:
+        ensure_replay_context(
+            initial_state=None,
+            parent_metadata={},
+            initial_input={"alert": "checkout-api p99"},
+        )
+    except ReplayExhaustedError as exc:
+        assert "unsupported_context" in str(exc)
+    else:
+        raise AssertionError("缺少 initial_state 时不该继续复现")
+
+
+def test_initial_state_guard_accepts_the_two_declared_paths() -> None:
+    """要么真的给了状态，要么录制方显式声明只跑 task 消息。"""
+
+    # 显式给了 initial_state：引擎恢复的是真实状态。
+    ensure_replay_context(
+        initial_state={"messages": []},
+        parent_metadata={},
+        initial_input={"alert": "checkout-api p99"},
+    )
+    # 录制方显式打了 task_only 标记：这是录制契约的一部分，不是引擎的猜测。
+    ensure_replay_context(
+        initial_state=None,
+        parent_metadata={"afr_replay_context": "task_only"},
+        initial_input={"alert": "checkout-api p99"},
+    )
+    # 父 Run 本来就没记 input：没有需要恢复的状态。
+    ensure_replay_context(initial_state=None, parent_metadata={}, initial_input=None)
