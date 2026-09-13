@@ -2,82 +2,79 @@
 
 | 项 | 值 |
 | --- | --- |
-| 状态 | 离线契约与运行器已交付并验证；真实模型样本**未执行**（凭据受限） |
+| 状态 | 已用真实模型完成两轮对照；结论见下 |
 | 验证对象提交 | `da1038c15ad5f010416924270ff4a0e17a15169f` |
+| 模型 | `opencode-go/deepseek-v4.1-flash` |
 | 运行器 | `integrations/pi/`，pi coding-agent SDK 0.85.1 |
 | 最近更新 | 2026-09-13 |
 
-本文档只记录实际观察到的事实。没有执行的部分写"未执行"，不用离线演示代替真实模型结论。
+原始包、`results.json` 与 `report.md` 位于 `integrations/pi/artifacts/`（已 gitignore）。它们来自 `opencode-go` 网关，不是离线剧本模型。
 
 ---
 
-## 1. 已完成并验证的部分
+## 1. 两轮对照：录制结果 vs 仓库快照
 
-**回放可信度修复**（Python 测试通过）
+同一套 5 个任务、同样的 baseline / grounded 两个 Prompt、每组 3 次采样，共 30 个回归样本。唯一变量是回归时工具结果的来源。
 
-- 父运行轨迹结束之后新增的真实工具步骤，现在同样经过副作用闸门。此前该路径只解析执行模式、直接返回 `live`。
-- 缺少匹配的录制工具结果时回放立即停止，不再返回标记为成功消息的合成结果继续推理。
-- 用例结论区分 `passed / failed / inconclusive / error`；录制不完整不可能判通过。
-- 回放前校验事件边界、序列缺口、脱敏与截断上下文；不满足则记为 `inconclusive`。
+| 回归工具来源 | 可判断 | 通过 | 失败 | 无法判断 | 平均模型调用 | token |
+| --- | --- | --- | --- | --- | --- | --- |
+| `recorded`（严格重放录制结果） | 2/30 | 1 | 1 | 28（93%） | 1.6 | 244,803 |
+| `snapshot`（固定快照上重执行只读工具） | 30/30 | 25 | 5 | 0 | 4.2 | 804,389 |
 
-**pi 运行器离线契约**（`npm test`，7 项通过）
+**这是本轮最重要的发现。** 严格重放要求工具名、参数、次序逐项一致，而模型即使在同一 Prompt 下也会更换 grep 模式或换一个目录去查。结果不是"回归失败"，而是根本拿不到结论：30 个样本里 28 个在第一步或第二步就停住。
 
-- 用真实 pi coding-agent SDK 录制一次 `read` 调用，再在**不访问原工作树、不调用 provider** 的前提下完成复现，行为步骤与原文一致。
-- 回归模式下新 Prompt 改变工具参数时，运行器在对应步骤停止并返回 `inconclusive`，不回退真实工具执行。
-- 同名同参数结果只被消费一次；提前结束复现会报 `early_end`。
-- 路径穿越、符号链接与 Windows junction 被拒绝；被拒绝的动作不进入录制输入。
-- 含凭据内容在落盘前脱敏，脱敏后的包标记为不完整并拒绝可信回放。
-- 模型与工具预算真实中断 SDK 循环；provider 错误保留为 `error` 而不是"无法判断"。
-- `models.json` 的 `!command` 形式被拒绝，配置不能变成任意命令执行。
+固定提交加只读工具集之后，证据不可能漂移，因此可以放开工具真实执行；`snapshot` 模式据此把可判断率从 7% 提到 100%，代价是每个样本的模型调用从 1.6 次升到 4.2 次（它真的在调查）。
 
-**跨语言链路**（`server/tests/test_pi_protocol.py`）
+## 2. 失败分类：没有一个是答错的
 
-- TypeScript 运行器产出的载荷通过 Python `IngestRequest` 校验、`POST /v1/ingest` 入库并在控制台可见；pi 运行在服务端发起回放时返回 409，指向本地运行器。
+`npm run audit` 把"没按格式输出"和"答错了"分开。30 个 `snapshot` 样本：
 
-**验证脚本按预期失败**
-
-对固定提交执行 `npm run validate` 时，脚本先逐条核对 5 个任务的预期源码引用是否仍然匹配（全部匹配），随后在第一次真实模型请求处停止，并写出 `results.json` 与 `report.md`。临时工作树在结束后被移除，`git worktree list` 只余主仓库与本工作树。
-
----
-
-## 2. 真实模型样本未执行的原因
-
-按计划需要 provider 与凭据。当前环境里可用的三个网关都无法完成一次真实请求：
-
-| 网关 | 模型 | 观察到结果 |
+| 分类 | 数量 | 含义 |
 | --- | --- | --- |
-| opencode（付费模型） | `claude-sonnet-4-6`、`glm-5.3-flash`、`minimax-m3` | `401 CreditsError: Insufficient balance` |
-| opencode（免费模型） | `deepseek-v4-flash-free`、`nemotron-3-ultra-free`、`mimo-v2.5-free` | `400 MissingSessionID: OpenCode's free tier can only be used in OpenCode`；`deepseek-v4-flash-free` 另报 `Model is unavailable` |
-| Agnes | `agnes-2.5-pro`、`agnes-3.0-flash` | `503 model_not_found / No available channel`；`agnes-3.0-flash` 60 秒超时 |
+| `pass` | 21 | 结构化输出，答案与引用都正确 |
+| `format_only` | 7 | **答案与引用都正确**，但在 JSON 前后附加了解释文字，严格解析失败 |
+| `bad_evidence` | 2 | 答案正确，引用的行号或原文对不上 |
+| `wrong_answer` | 0 | — |
 
-本机无 `~/.pi/agent/auth.json`，`ollama`、LM Studio 等本地推理服务未运行（11434 / 1234 / 8080 / 8000 均无响应）。
+也就是说，只看内容正确性时是 28/30。用例判定里那 5 个 `failed`，大部分其实是格式问题。**如果不看这个分类，会把模型的格式习惯误读成能力缺陷。**
 
-因此 `integrations/pi/validation/suite.json` 中的 5 个任务虽然已写好、预期引用已人工核对，但**没有任何模型样本被执行**。通过率、模型调用量与耗时都没有真实数据，本文档不给出估计值。
+## 3. 修正版 Prompt 没有带来改善
 
-复现该阻塞：
+| 判定口径 | baseline | grounded |
+| --- | --- | --- |
+| 严格（结构 + 内容） | 14/15 | 11/15 |
+| 仅内容正确性（audit） | 15/15 | 13/15 |
+
+两种口径下 grounded 都**没有**更好，反而少通过 2~3 个样本。两个 `bad_evidence` 也都出现在 grounded 组。
+
+原因不是 Prompt 变差，而是**任务太简单**：baseline 已经全部答对，没有可修复的失败，自然看不出修正版 Prompt 的价值。这与计划里"两组都通过 → 重新设计任务"的分支一致。
+
+因此本轮**没有观察到任何"失败 → 通过"的真实修复**，不声称修复效果。
+
+## 4. 固定提交上的事实核查
+
+五个任务的预期答案与引用行在运行前由脚本逐条比对源码验证通过（`validate.ts` 会拒绝过期的预期引用）。正确答案记录在 `validation/suite.json`。
+
+人工构造的负向控制（把答案故意改成相反值）在两轮中都稳定判为失败，说明断言本身能区分对错。
+
+## 5. 成本
+
+两轮合计约 105 万 token（含 5 次录制）。单个 `snapshot` 回归样本平均 22,766 token、4.2 次模型调用、4.4 次工具调用，p95 耗时约 20 秒。用 `deepseek-v4.1-flash` 这个量级可以频繁重跑，这也是先用它做验证的原因。
+
+## 6. 复现方式
 
 ```powershell
 cd integrations/pi
-npm run validate -- --repo ../.. --provider opencode --model claude-sonnet-4-6 --models-path artifacts/models.json --out artifacts/validation
+$env:MSEE_PI_GATEWAY_KEY = "<opencode-go key>"
+npm run validate -- --repo ../.. --provider opencode-go --model deepseek-v4.1-flash `
+  --models-path artifacts/models.json --tool-source snapshot --samples 3 --out artifacts/validation
+npm run audit -- --dir artifacts/validation
 ```
 
-`artifacts/` 已被 gitignore。模型配置模板见 `integrations/pi/validation/opencode.example.json`。
+## 7. 仍未验证 / 已知限制
 
----
-
-## 3. 解除阻塞后要做的事
-
-1. 提供可用凭据（或改用网关免费额度覆盖的模型），重跑 `npm run validate`。
-2. 核对该次运行是否真的出现"baseline 失败 → grounded 通过"；没有出现就照实报告。
-3. 分开统计三类结果：断言失败、录制不足导致的 `inconclusive`、执行错误。只有第一类能作为模型结论证据。
-4. 人工复核通过样本引用的源码行，确认不是格式命中而实质错误。
-5. 若多数样本因工具参数变化而 `inconclusive`，按计划转向"固定仓库快照上的只读工具重执行"，而不是继续扩充控制台。
-
----
-
-## 4. 仍未验证的能力
-
-- 单一模型单次采样不代表稳定性；计划里的每个对照组 3 次采样尚未产生数据。
+- **任务区分度不足**：需要 baseline 真的会失败的任务，才能真正检验"改 Prompt 是否变好"。这是下一步最该补的。
+- 每个条件只有 3 次采样，且只跑了一个模型；结论不外推到其他模型。
+- 断言要求精确行号与原文，对引用质量是严格口径；`format_only` 说明这个口径与模型的输出习惯有摩擦。
 - 只读调查以外的任务（编辑文件、执行命令）没有接入，也没有回放语义。
-- pi 之外的第二条真实 Agent 路径（除 LangGraph 离线示例外）仍未接入。
-- 复现验证的是 pi 循环与完整消息内容，不是 token 流逐帧复现。
+- 除 pi 与 LangGraph 离线示例外，还没有第三条真实 Agent 路径。

@@ -30,7 +30,33 @@ npm start -- case run --case artifacts/case.json --prompt validation/grounded.tx
 
 回归默认继承录制的 provider/model；换模型时必须同时指定这两个选项。复现拒绝 Prompt/model 覆盖。输出文件先落盘，再尝试上报 `http://127.0.0.1:7710`，可用 `--endpoint` 覆盖。上报失败不删除本地文件。
 
+### 回归时工具结果从哪来（`--tool-source`）
+
+| 取值 | 行为 | 何时用 |
+| --- | --- | --- |
+| `recorded`（默认） | 严格按工具名、参数、次序消费录制结果；不一致就停 | 证据必须逐字节可比的场景 |
+| `snapshot` | 只读工具在固定提交的工作树上真实执行 | 调查类 Agent 的日常回归 |
+
+`snapshot` 的合法性来自两个前提：工具集全只读（没有可执行副作用），目标仓库固定在某个提交（证据不会漂移）。因此两个 Prompt 仍然可比，而模型可以自由换查询方式。
+
+这是实测出来的差异，不是设计偏好：同一套 5 个任务 30 个回归样本，`recorded` 下 28 个因为模型换了 grep 参数而无法判断，`snapshot` 下 30 个全部给出明确结论。详见 [docs/pi-validation.md](../../docs/pi-validation.md)。
+
+```powershell
+npm start -- replay --bundle artifacts/run.json --mode regress --tool-source snapshot `
+  --repo ../.. --prompt validation/grounded.txt --out artifacts/regress.json
+```
+
+`snapshot` 需要 `--repo`：运行器会为该提交新建 detached 工作树，跑完检查干净后移除；若工作树被改动则保留路径供排查，不强制删除。复现模式始终使用录制结果，不接受该选项。
+
 `assertions.json` 是非空数组，支持 Python 用例的基本确定性断言类型（不含 args_contains），并增加 `json_claim`：答案与人工核实的源码引用一起匹配。参见 `validation/suite.json`。用例保存源包哈希，源包改变后必须重新创建用例。
+
+判定为失败时，用审计分开"答错"和"没按格式输出"：
+
+```powershell
+npm run audit -- --dir artifacts/validation
+```
+
+输出把每个样本分成 `pass` / `format_only`（答案和引用都对，只是 JSON 外面还写了说明）/ `bad_evidence`（答案对但引用不符）/ `wrong_answer` / `no_json`。只看通过率会把模型的格式习惯误读成能力问题。
 
 退出码：0 通过/运行成功，1 断言失败，2 无法判断，3 执行错误。CLI 最后一行是 JSON 结果；运行成功不等于调查结论正确，必须运行断言并人工核查必要的引用。
 
@@ -52,7 +78,7 @@ npm start -- case run --case artifacts/case.json --prompt validation/grounded.tx
 npm run validate -- --repo ../.. --provider PROVIDER --model MODEL --out artifacts/validation
 ```
 
-五个任务的预期答案已按固定提交人工检查；执行前会再次校验引用的原文行。每个任务录制一次，然后 baseline/grounded 各回归三次。源码、Prompt、完整包和 JSON/Markdown 报告共同构成证据。
+五个任务的预期答案已按固定提交人工检查；执行前会再次校验引用的原文行。每个任务录制一次，然后 baseline/grounded 各回归三次。`--only <id,...>` 与 `--samples <n>` 可先跑子集，避免在没有信号时跑满矩阵。源码、Prompt、完整包和 JSON/Markdown 报告共同构成证据。
 
 `results.json` 记录通过、失败、无法判断、错误，以及模型调用数、token 与耗时。人工负向控制单列，不参与真实模型统计。准确源码引用是较严格的判定条件，未通过时要区分格式/引用问题与实质判断错误。没有修复现象就报告没有观察到修复；录制覆盖不足不解释为模型退化。
 

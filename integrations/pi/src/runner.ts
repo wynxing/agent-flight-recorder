@@ -13,6 +13,8 @@ import { clone, canonical, confined, rejectLinks, Incomplete, Tape, modelText, t
 export interface RunOptions {
   bundle: Bundle; parent?: Bundle; root?: string; authPath?: string; modelsPath?: string;
   maxModels?: number; maxTools?: number; timeoutMs?: number;
+  /** Regress only. `snapshot` re-runs read-only tools against the pinned checkout instead of the tape. */
+  toolSource?: 'recorded' | 'snapshot';
   // Dependency injection for offline SDK contract tests; never exposed by the CLI.
   stream?: (...args: any[]) => any;
 }
@@ -52,6 +54,10 @@ export async function run(options: RunOptions): Promise<Bundle> {
   const {bundle:b,parent} = options;
   const scratch = await mkdtemp(path.join(os.tmpdir(),'msee-pi-runtime-'));
   const replay = b.mode !== 'record';
+  // A frozen commit plus a read-only tool set means live tool results are still comparable:
+  // the evidence cannot drift, so the model may explore freely instead of replaying a tape.
+  const toolSource = b.toolSource ?? options.toolSource ?? 'recorded';
+  const liveTools = b.mode === 'record' || (b.mode === 'regress' && toolSource === 'snapshot');
   const previousOffline=process.env.PI_OFFLINE;
   process.env.PI_OFFLINE='1'; // Prevent native tool bootstrap downloads; model transport remains explicit.
   const all = new Tape(parent?.steps ?? []);
@@ -68,10 +74,10 @@ export async function run(options: RunOptions): Promise<Bundle> {
   process.once('SIGINT',interrupt);
   try {
     if (parent && (!parent.complete || parent.piVersion !== b.piVersion)) throw new Incomplete('incomplete_or_incompatible_recording');
-    if (!replay && !options.root) throw new Error('record requires isolated repository');
-    // An empty runtime directory is used for replay: no access to the recorded checkout.
-    const cwd = replay ? scratch : options.root!;
-    if (!replay) await rejectLinks(cwd);
+    if (liveTools && !options.root) throw new Error(`${b.mode} with toolSource=${toolSource} requires an isolated repository`);
+    // A reproduce run uses an empty runtime directory: it must not read the recorded checkout.
+    const cwd = liveTools ? options.root! : scratch;
+    if (liveTools) await rejectLinks(cwd);
     if (options.modelsPath) await assertNoCommandExecution(options.modelsPath);
     const runtime = await ModelRuntime.create({authPath: options.authPath ?? path.join(scratch,'auth.json'),
       modelsPath:options.modelsPath ?? null,modelsStorePath:path.join(scratch,'models-store.json'),
@@ -107,8 +113,9 @@ export async function run(options: RunOptions): Promise<Bundle> {
       const input = clone(args[1]);
       const start = performance.now();
       try {
-        if (replay) {
+        if (!liveTools) {
           const step = b.mode === 'reproduce' ? all.take('tool_call',tool.name,input) : toolsTape.take('tool_call',tool.name,input);
+          step.source = 'recorded';
           b.steps.push(step);
           if (step.error) throw new Error(step.error);
           return clone(step.output);
@@ -119,11 +126,11 @@ export async function run(options: RunOptions): Promise<Bundle> {
         await rejectLinks(cwd);
         const executeArgs=[...args];executeArgs[1]={...input,path:target};
         const output = await (tool.execute as any)(...executeArgs);
-        b.steps.push({kind:'tool_call',name:tool.name,input,output:clone(output),duration_ms:performance.now()-start});
+        b.steps.push({kind:'tool_call',name:tool.name,input,output:clone(output),duration_ms:performance.now()-start,source:'live'});
         return output;
       } catch(e) {
         if (e instanceof Incomplete) { fatal=e; aborter.abort(); }
-        if (!replay) b.steps.push({kind:'tool_call',name:tool.name,input,error:e instanceof Error?e.message:String(e),duration_ms:performance.now()-start});
+        if (liveTools) b.steps.push({kind:'tool_call',name:tool.name,input,error:e instanceof Error?e.message:String(e),duration_ms:performance.now()-start,source:'live'});
         throw e;
       }
     }}));
@@ -142,6 +149,7 @@ export async function run(options: RunOptions): Promise<Bundle> {
           if (b.mode === 'reproduce') {
             const step=all.take('model_call');
             if (canonical(step.input)!==canonical(input)) throw new Incomplete('model_context_changed');
+            step.source='recorded';
             b.steps.push(step);
             if (!step.output) throw new Error(step.error ?? 'missing_model_response');
             const m=clone(step.output);
@@ -154,17 +162,17 @@ export async function run(options: RunOptions): Promise<Bundle> {
           for await (const event of stream) {
             if (event.type==='done'||event.type==='error') {
               const message=event.type==='done'?event.message:event.error;
-              b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start});
+              b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start,source:'live'});
               recorded=true;
             }
             output.push(event);
           }
           const message=await stream.result();
-          if(!recorded) b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start});
+          if(!recorded) b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start,source:'live'});
           output.end(message);
         } catch(e) {
           fatal=e instanceof Error ? e : new Error(String(e));
-          if (b.mode!=='reproduce') b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,error:fatal.message,duration_ms:performance.now()-start});
+          if (b.mode!=='reproduce') b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,error:fatal.message,duration_ms:performance.now()-start,source:'live'});
           const message:any={role:'assistant',content:[],api:model.api,provider:model.provider,model:model.id,
             usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:'error',errorMessage:String(e),timestamp:Date.now()};
           output.push({type:'error',reason:'error',error:message});output.end(message);
@@ -182,6 +190,7 @@ export async function run(options: RunOptions): Promise<Bundle> {
       all.finish();
       if (b.final!==parent!.final) throw new Incomplete('final_output_changed');
     }
+    if (b.mode==='regress' && toolSource==='recorded') toolsTape.finish();
   } catch(e) {
     const err=fatal ?? (e instanceof Error ? e : new Error(String(e)));
     b.reason=err.message;
@@ -192,6 +201,7 @@ export async function run(options: RunOptions): Promise<Bundle> {
     clearTimeout(timer);process.off('SIGINT',interrupt);
     if(previousOffline===undefined)delete process.env.PI_OFFLINE;else process.env.PI_OFFLINE=previousOffline;
     session?.dispose();
+    b.toolSource = b.mode === 'reproduce' ? 'recorded' : toolSource;
     b.ended=new Date().toISOString();
     // Only this uniquely generated, verified temp child belongs to this invocation.
     if (path.dirname(scratch)===os.tmpdir() && path.basename(scratch).startsWith('msee-pi-runtime-')) await rm(scratch,{recursive:true,force:true});

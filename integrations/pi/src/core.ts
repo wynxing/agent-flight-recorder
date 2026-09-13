@@ -7,11 +7,15 @@ export class Incomplete extends Error {}
 export interface Step {
   kind: 'model_call' | 'tool_call'; name: string; input: any; output?: any;
   error?: string; duration_ms: number;
+  /** Where this result came from. Absent on bundles written before snapshot mode existed. */
+  source?: 'live' | 'recorded';
 }
 export interface Bundle {
   version: 1; id: string; parent?: string; started: string; ended: string;
   task: string; prompt: string; promptHash: string; provider: string; model: string;
   commit: string; piVersion: string; thinking: 'off'; mode: 'record' | 'reproduce' | 'regress';
+  /** recorded: strict tape. snapshot: live read-only tools against the pinned checkout. */
+  toolSource?: 'recorded' | 'snapshot';
   steps: Step[]; final: string; complete: boolean; reason?: string;
   status: 'succeeded' | 'failed' | 'aborted'; verdict?: Verdict;
 }
@@ -100,7 +104,7 @@ export function payload(b: Bundle) {
     duration_ms:s.duration_ms, side_effect:s.kind === 'tool_call' ? 'read' : null,
     tokens:s.kind === 'model_call' && s.output?.usage ? {input:s.output.usage.input,output:s.output.usage.output,total:s.output.usage.totalTokens} : null,
     cost_usd:s.kind === 'model_call' ? s.output?.usage?.cost?.total ?? null : null,
-    effect_source:b.mode === 'regress' && s.kind === 'tool_call' ? 'recorded' : source,
+    effect_source:s.source ?? (b.mode === 'reproduce' ? 'recorded' : 'live'),
     attributes:{native_usage:s.output?.usage ?? null},
   }))];
   if (b.reason) events.push(event('error',events.length+1,{error:{type:b.verdict==='inconclusive'?'IncompleteReplay':'ExecutionError',message:b.reason}}));

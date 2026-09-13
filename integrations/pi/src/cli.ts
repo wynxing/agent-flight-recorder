@@ -6,7 +6,7 @@ import { run } from './runner.ts';
 import { snapshot } from './workspace.ts';
 import { evaluate, validateAssertions, exitCode, type CaseFile } from './cases.ts';
 
-const strings=['repo','commit','task','prompt','provider','model','bundle','mode','out','assertions','case','endpoint','auth-path','models-path','max-models','max-tools','timeout-ms'];
+const strings=['repo','commit','task','prompt','provider','model','bundle','mode','out','assertions','case','endpoint','auth-path','models-path','max-models','max-tools','timeout-ms','tool-source'];
 const {values,positionals}=parseArgs({allowPositionals:true,options:Object.fromEntries(strings.map(k=>[k,{type:'string' as const}]))});
 const get=(name:string)=>values[name] as string|undefined;
 const required=(name:string)=>{const v=get(name);if(!v)throw new Error(`--${name} is required`);return v;};
@@ -42,12 +42,17 @@ async function main() {
   const prompt=get('prompt')?await readFile(required('prompt'),'utf8'):parent?.prompt??await readFile(required('prompt'),'utf8');
   const provider=get('provider')??parent?.provider??required('provider');
   const model=get('model')??parent?.model??required('model');
-  const checkout=command==='record'?await snapshot(path.resolve(required('repo')),get('commit')??'HEAD'):undefined;
+  const toolSource=get('tool-source')??'recorded';
+  if(!['recorded','snapshot'].includes(toolSource))throw new Error('Invalid --tool-source');
+  if(toolSource==='snapshot'&&!['record','regress'].includes(mode))throw new Error('--tool-source snapshot applies to record or regress only');
+  const needsCheckout=mode==='record'||(mode==='regress'&&toolSource==='snapshot');
+  const checkout=needsCheckout?await snapshot(path.resolve(required('repo')),get('commit')??parent?.commit??'HEAD'):undefined;
   const b=fresh(task,prompt,provider,model,checkout?.commit??parent!.commit);
   b.mode=mode as typeof b.mode;b.parent=parent?.id;
   let evaluation:ReturnType<typeof evaluate>|undefined;
   try {
     await run({bundle:b,parent,root:checkout?.root,authPath:get('auth-path'),modelsPath:get('models-path'),
+      toolSource:toolSource as 'recorded'|'snapshot',
       maxModels:number('max-models',20),maxTools:number('max-tools',60),timeoutMs:number('timeout-ms',600000)});
     if(caseFile) {evaluation=evaluate(b,caseFile.assertions);b.verdict=evaluation.verdict;}
   } finally {
@@ -55,7 +60,7 @@ async function main() {
     const stored=await save(out,b);
     const transport=await upload(stored,get('endpoint')??'http://127.0.0.1:7710');
     const verdict=stored.verdict??(stored.complete&&stored.status==='succeeded'?'passed':stored.complete?'error':'inconclusive');
-    console.log(JSON.stringify({bundle:out,run_id:stored.id,verdict,reason:stored.reason,results:evaluation?.results,...transport}));
+    console.log(JSON.stringify({bundle:out,run_id:stored.id,verdict,toolSource:stored.toolSource,reason:stored.reason,results:evaluation?.results,...transport}));
     process.exitCode=exitCode(verdict);
   }
 }
