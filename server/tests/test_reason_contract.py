@@ -194,7 +194,7 @@ def test_documented_production_sites_really_exist() -> None:
                 f"文档说 pi 侧能产生 {code}，但测试里没有登记它的产生点"
             )
             source = (ROOT / PI_PRODUCTION_SITES[code]).read_text(encoding="utf-8")
-            assert (chr(39) + code + chr(39)) in source or (chr(34) + code + chr(34)) in source, (
+            assert f"'{code}'" in source or f'"{code}"' in source, (
                 f"{code} 的产生点不在文档所写的 {PI_PRODUCTION_SITES[code]}"
             )
         else:
@@ -210,7 +210,7 @@ def _production_hits(code: str, *, pi: bool) -> list[str]:
     本身不是产生路径，把它算进来会让「只做兼容解析」的码看起来像有产生点。
     """
 
-    needles = [chr(39) + code + chr(39), chr(34) + code + chr(34)]
+    needles = [f"'{code}'", f'"{code}"']
     if not pi:
         needles.append(code.upper())  # InconclusiveCode 的成员名，如 MODEL_CONTEXT_CHANGED
     roots = (
