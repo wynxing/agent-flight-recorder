@@ -1,0 +1,65 @@
+/*
+ * 设计令牌。
+ *
+ * 这是一个面向开发者的高密度调试控制台。设计技能 (design-taste-frontend) 第 13 节
+ * 明确把 dashboard / 密集产品 UI 排除在它的适用范围之外，并要求"明说并只取适用的部分"。
+ * 因此这里只采纳它通用的那几条：单一强调色、语义色严格分离、一种圆角体系、
+ * 不用纯黑、不要霓虹外发光、完整的状态设计、可见文本零长破折号。
+ *
+ * 主题锁定为深色：黑匣子是一块仪表盘，调试往往发生在夜里。
+ */
+
+:root {
+  /* 中性底：冷灰蓝，不是纯黑 */
+  --bg: #0e1116;
+  --bg-raised: #141922;
+  --bg-inset: #0a0d12;
+  --bg-hover: #1a2030;
+
+  --border: #232a36;
+  --border-strong: #333d4e;
+
+  --text: #e6e9ef;
+  --text-muted: #98a1b3;
+  --text-faint: #6b7488;
+
+  /* 唯一强调色：冷青。刻意避开被用滥的紫蓝渐变。 */
+  --accent: #4cc2d4;
+  --accent-strong: #78d8e8;
+  --accent-dim: rgba(76, 194, 212, 0.14);
+  --accent-ring: rgba(76, 194, 212, 0.45);
+
+  /* 语义色：每一步的结果来源、告警与错误各占一色，互不混用 */
+  --live: #59c98a;
+  --live-dim: rgba(89, 201, 138, 0.14);
+  --recorded: #8b95a8;
+  --recorded-dim: rgba(139, 149, 168, 0.14);
+  --dryrun: #e0a458;
+  --dryrun-dim: rgba(224, 164, 88, 0.16);
+  --blocked: #e0707b;
+  --blocked-dim: rgba(224, 112, 123, 0.16);
+  --danger: #e0707b;
+  --danger-dim: rgba(224, 112, 123, 0.14);
+  --success: #59c98a;
+  --success-dim: rgba(89, 201, 138, 0.14);
+  --warning: #e0a458;
+  --warning-dim: rgba(224, 164, 88, 0.16);
+
+  /* 一种圆角体系，规则固定：容器 10 / 控件 8 / 行内标记 6 */
+  --radius-container: 10px;
+  --radius-control: 8px;
+  --radius-chip: 6px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable Text', 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.32);
+
+  --step-1: 12px;
+  --step-2: 13px;
+  --step-3: 15px;
+  --step-4: 18px;
+  --step-5: 24px;
+}
+

@@ -12,6 +12,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 
 from .prompts import DEFAULT_SYSTEM_PROMPT
+from .prompts import GROUNDED_SYSTEM_PROMPT
 from .scripted_model import SCRIPTED_MODEL_NAME, ScriptedChatModel
 from .tools import ALL_TOOLS, TOOL_SIDE_EFFECTS
 
@@ -111,6 +112,7 @@ def agent_spec() -> AgentSpec:
         version=AGENT_VERSION,
         default_model=SCRIPTED_MODEL_NAME,
         default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+        prompt_presets={"default": DEFAULT_SYSTEM_PROMPT, "grounded": GROUNDED_SYSTEM_PROMPT},
         tool_side_effects=TOOL_SIDE_EFFECTS,
     )
 
@@ -124,4 +126,3 @@ __all__ = [
     "resolve_model",
     "run_scenario",
 ]
-

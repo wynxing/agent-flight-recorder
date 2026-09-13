@@ -21,4 +21,3 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["sdk/tests", "server/tests", "examples/langgraph_sre_agent/tests"]
 addopts = "-q"
-

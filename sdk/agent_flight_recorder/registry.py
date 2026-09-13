@@ -33,6 +33,7 @@ class AgentSpec:
     version: str = ""
     default_model: str | None = None
     default_system_prompt: str | None = None
+    prompt_presets: dict[str, str] = field(default_factory=dict)
     tool_side_effects: dict[str, SideEffect] = field(default_factory=dict)
 
     def describe(self) -> dict[str, Any]:
@@ -41,6 +42,8 @@ class AgentSpec:
             "description": self.description,
             "version": self.version,
             "default_model": self.default_model,
+            "default_system_prompt": self.default_system_prompt,
+            "prompt_presets": dict(self.prompt_presets),
             "tools": list(self.tool_side_effects),
         }
 

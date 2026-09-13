@@ -85,15 +85,19 @@ def align_models(a_events: Sequence[Event], b_events: Sequence[Event]) -> list[A
 
 
 def summary_delta(a: RunSummary, b: RunSummary) -> list[SummaryDelta]:
+    # 最后一个字段标记"减少是否等于更好"。
+    #
+    # 调用次数刻意不判定：多调几次工具可能意味着更充分的取证，少调几次也可能意味着
+    # 漏查。平台不该在语义模糊的地方替用户下结论，因此那一行只给数字。
     rows: list[tuple[str, float | int | None, float | int | None, bool]] = [
         ("模型调用次数", a.model_calls, b.model_calls, False),
         ("工具调用次数", a.tool_calls, b.tool_calls, False),
         ("错误数", a.error_count, b.error_count, True),
-        ("输入 tokens", a.tokens_input, b.tokens_input, False),
-        ("输出 tokens", a.tokens_output, b.tokens_output, False),
+        ("输入 tokens", a.tokens_input, b.tokens_input, True),
+        ("输出 tokens", a.tokens_output, b.tokens_output, True),
     ]
     deltas: list[SummaryDelta] = []
-    for name, left, right, invert in rows:
+    for name, left, right, lower_is_better in rows:
         delta = (right or 0) - (left or 0)
         deltas.append(
             SummaryDelta(
@@ -101,7 +105,7 @@ def summary_delta(a: RunSummary, b: RunSummary) -> list[SummaryDelta]:
                 a=left,
                 b=right,
                 delta=delta,
-                hint=_direction(delta, invert=invert),
+                hint=_direction(delta, lower_is_better=lower_is_better),
             )
         )
 
@@ -112,7 +116,7 @@ def summary_delta(a: RunSummary, b: RunSummary) -> list[SummaryDelta]:
             a=_round(a.duration_ms),
             b=_round(b.duration_ms),
             delta=_round(duration_delta),
-            hint=_direction(_round(duration_delta) or 0),
+            hint=_direction(_round(duration_delta) or 0, lower_is_better=True),
         )
     )
     deltas.append(
@@ -121,7 +125,7 @@ def summary_delta(a: RunSummary, b: RunSummary) -> list[SummaryDelta]:
             a=a.cost_usd,
             b=b.cost_usd,
             delta=round(b.cost_usd - a.cost_usd, 6),
-            hint=_direction(round(b.cost_usd - a.cost_usd, 6)),
+            hint=_direction(round(b.cost_usd - a.cost_usd, 6), lower_is_better=True),
         )
     )
     return deltas
@@ -283,11 +287,12 @@ def _verdict(
     return "；".join(parts)
 
 
-def _direction(delta: float, *, invert: bool = False) -> str:
+def _direction(delta: float, *, lower_is_better: bool = False) -> str:
     if delta == 0:
         return "持平"
-    better = (delta > 0) if invert else (delta < 0)
-    return "更好" if better else "更差"
+    if not lower_is_better:
+        return ""
+    return "更好" if delta < 0 else "更差"
 
 
 def _round(value: float | None) -> float | None:

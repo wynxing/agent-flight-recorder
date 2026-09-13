@@ -23,6 +23,9 @@ data/
 # Nested worktrees
 .worktrees/
 
+# Local scratch (screenshots, one-off scripts)
+.shots/
+
 # Editors / OS
 .vscode/
 .idea/

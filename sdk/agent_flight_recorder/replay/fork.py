@@ -30,7 +30,12 @@ class Fork(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
-BEHAVIORAL = (EventType.MODEL_CALL, EventType.TOOL_CALL, EventType.ERROR)
+# 参与位置对齐的只有模型调用与工具调用。
+#
+# 错误事件刻意排除在外：回放过程中不会为 ERROR 单独推进游标，如果父 Run 里的错误
+# 也占一个行为步位置，后续步骤就会整体错位，"第一个不同的步骤"也就失去意义。
+# 操作层面的失败仍会被记录（工具失败写进 tool_call 的 error 字段），因此不会丢信息。
+BEHAVIORAL = (EventType.MODEL_CALL, EventType.TOOL_CALL)
 
 
 def behavioral_steps(events: Sequence[Event]) -> list[Event]:
@@ -169,4 +174,3 @@ def detect_fork(parent_events: Sequence[Event], replay_events: Sequence[Event]) 
         if fork is not None:
             return fork
     return None
-

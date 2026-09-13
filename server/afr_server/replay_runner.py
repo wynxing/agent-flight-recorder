@@ -17,6 +17,7 @@ from agent_flight_recorder.models import (
     RunRecord,
     RunStatus,
     new_id,
+    utcnow,
 )
 from agent_flight_recorder.recorder import Recorder
 from agent_flight_recorder.replay.engine import ReplayPlan, ReplaySession
@@ -24,7 +25,8 @@ from agent_flight_recorder.replay.langgraph_adapter import apply_plan_to_recorde
 
 from .agents import resolve_agent_spec
 from .db import session_scope
-from .storage import get_events, get_run, run_to_record, update_run_metadata
+from .storage import get_events, get_run, naive_utc, run_to_record, update_run_metadata
+from .tables import RunTable
 from .transport import DirectTransport
 
 logger = logging.getLogger(__name__)
@@ -65,8 +67,56 @@ def submit_replay(plan: ReplayPlan, *, run_id: str | None = None) -> str:
     """提交一次回放，立即返回新的 run_id。真正的执行在后台线程。"""
 
     replay_run_id = run_id or new_id()
+    prepare_run(plan, replay_run_id)
     _executor.submit(_run_job, plan, replay_run_id)
     return replay_run_id
+
+
+def prepare_run(
+    plan: ReplayPlan,
+    replay_run_id: str,
+    *,
+    labels: dict[str, str] | None = None,
+    case: dict[str, Any] | None = None,
+) -> None:
+    """在后台执行之前就把 Run 行建好。
+
+    否则从"发起回放"到"第一批事件入库"之间有一段窗口期，用户点开刚拿到的链接会看到
+    404。回放是一个立刻可见的对象，不能等第一批事件到了才存在。
+    """
+
+    with session_scope() as session:
+        parent_row = get_run(session, plan.parent_run_id)
+        if parent_row is None:
+            raise ValueError(f"parent run not found: {plan.parent_run_id}")
+
+        meta: dict[str, Any] = {
+            "afr_replay": {
+                "parent_run_id": plan.parent_run_id,
+                "from_seq": plan.from_seq,
+                "policy": plan.policy.model_dump(mode="json"),
+                "pending": True,
+            }
+        }
+        if case is not None:
+            meta["afr_case"] = case
+
+        session.add(
+            RunTable(
+                id=replay_run_id,
+                agent_name=parent_row.agent_name,
+                agent_version=parent_row.agent_version,
+                model=plan.overrides.model or parent_row.model,
+                status=RunStatus.RUNNING.value,
+                parent_run_id=plan.parent_run_id,
+                replay_from_seq=plan.from_seq,
+                effect_policy=plan.policy.model_dump(mode="json"),
+                prompt_version=parent_row.prompt_version,
+                labels={**(parent_row.labels or {}), **(labels or {})},
+                meta=meta,
+                started_at=naive_utc(utcnow()),
+            )
+        )
 
 
 def _run_job(plan: ReplayPlan, replay_run_id: str) -> None:

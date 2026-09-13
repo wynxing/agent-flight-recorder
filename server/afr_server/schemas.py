@@ -70,6 +70,7 @@ class CaseCreateRequest(BaseModel):
     preset: ReplayPreset | None = None
     policy: EffectPolicy | None = None
     model: str | None = None
+    system_prompt: str | None = None
 
 
 class CaseItem(BaseModel):
@@ -84,6 +85,7 @@ class CaseItem(BaseModel):
     preset: ReplayPreset | None = None
     policy: EffectPolicy | None = None
     model: str | None = None
+    system_prompt: str | None = None
     last_status: str | None = None
     last_run_id: str | None = None
     last_run_at: datetime | None = None
@@ -114,6 +116,8 @@ class AgentInfo(BaseModel):
     description: str = ""
     version: str = ""
     default_model: str | None = None
+    default_system_prompt: str | None = None
+    prompt_presets: dict[str, str] = Field(default_factory=dict)
     tools: list[str] = Field(default_factory=list)
     can_replay: bool = True
     can_seed: bool = False
@@ -133,6 +137,7 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         preset=_preset(policy.get("preset")),
         policy=EffectPolicy.model_validate(policy["policy"]) if policy.get("policy") else None,
         model=policy.get("model"),
+        system_prompt=policy.get("system_prompt"),
         last_status=row.last_status,
         last_run_id=row.last_run_id,
         last_run_at=row.last_run_at,
@@ -167,4 +172,3 @@ __all__ = [
     "TimelineResponse",
     "case_to_item",
 ]
-

@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .agents import describe_agents, load_agent_specs
 from .cases import snapshot_of, submit_case_run
@@ -138,6 +139,8 @@ def list_agents() -> list[AgentInfo]:
             description=item.get("description", ""),
             version=item.get("version", ""),
             default_model=item.get("default_model"),
+            default_system_prompt=item.get("default_system_prompt"),
+            prompt_presets=item.get("prompt_presets", {}),
             tools=item.get("tools", []),
             can_replay=True,
             can_seed=True,
@@ -396,6 +399,7 @@ def create_case(payload: CaseCreateRequest) -> CaseItem:
                 "preset": payload.preset.value if payload.preset else None,
                 "policy": payload.policy.model_dump(mode="json") if payload.policy else None,
                 "model": payload.model,
+                "system_prompt": payload.system_prompt,
             },
             created_at=utcnow(),
         )
@@ -437,9 +441,26 @@ def mount_console(application: FastAPI) -> bool:
     dist = Path(__file__).resolve().parents[2] / "web" / "dist"
     if not dist.is_dir():
         return False
-    application.mount("/", StaticFiles(directory=str(dist), html=True), name="console")
+    application.mount("/", SpaStaticFiles(directory=str(dist), html=True), name="console")
     return True
 
 
-mount_console(app)
+class SpaStaticFiles(StaticFiles):
+    """带 SPA 回退的静态托管。
 
+    控制台用的是 HTML5 history 路由（/runs、/diff、/cases）。直接打开或刷新这些
+    地址时磁盘上并没有对应文件，如果不回退到 index.html，用户看到的会是一段
+    JSON 404 而不是界面。带扩展名的路径仍然按真实 404 处理，避免把缺失的静态
+    资源伪装成成功响应。
+    """
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and not Path(path).suffix:
+                return await super().get_response("index.html", scope)
+            raise
+
+
+mount_console(app)
