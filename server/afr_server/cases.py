@@ -16,6 +16,7 @@ from agent_flight_recorder.models import (
     ATTR_GATE,
     EffectPolicy,
     EffectSource,
+    ReplayBudget,
     ReplayPreset,
     new_id,
     utcnow,
@@ -26,6 +27,7 @@ from agent_flight_recorder.replay.reasons import (
     InconclusiveReason,
     most_significant,
 )
+from sqlmodel import col, update
 
 from .assertions import AssertionSpec, evaluate_assertions
 from .db import session_scope
@@ -40,6 +42,28 @@ logger = logging.getLogger(__name__)
 ResultHook = Callable[[str, list[dict[str, Any]], "InconclusiveReason | None"], None]
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="afr-case")
+
+
+def write_case_record(session: Any, case_id: str, **record: Any) -> None:
+    """把用例行的「最近一次结论」整条写下去。
+
+    这里刻意**不用**「读出行对象 -> 改属性 -> 让 ORM 提交」：那种写法只会提交与
+    它读到的那份快照相比有变化的列。批量运行里同一条用例会被多个条件并发执行，
+    两个格子都要写这一行，于是「没变动的那几列」会被留在对方写下的值上，拼出
+    「A 这次执行的 run_id + B 那次执行的条件」这种自相矛盾的记录——而用例页承诺
+    「最近一次条件」与「最近一次执行」属于同一次执行（见 docs/protocol.md 第 7 节）。
+
+    每一条 UPDATE 都带上**这个写入点负责的全部字段**，因此谁最后提交，这一整条
+    记录就整个来自谁，不存在按列混搭。
+    """
+
+    session.execute(
+        update(CaseTable)
+        .where(col(CaseTable.id) == case_id)
+        .values(**record)
+        # 不需要把结果同步回会话里的对象：调用方写完这条就结束，不会再用那个对象。
+        .execution_options(synchronize_session=False)
+    )
 
 
 def create_case(
@@ -102,6 +126,7 @@ def submit_case_run(
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
 ) -> str:
@@ -112,6 +137,7 @@ def submit_case_run(
         from_seq=from_seq,
         preset=preset,
         policy=policy,
+        budget=budget,
         model=model,
         system_prompt=system_prompt,
     )
@@ -125,6 +151,7 @@ def run_case_blocking(
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
     on_started: Callable[[str], None] | None = None,
@@ -145,6 +172,7 @@ def run_case_blocking(
         from_seq=from_seq,
         preset=preset,
         policy=policy,
+        budget=budget,
         model=model,
         system_prompt=system_prompt,
     )
@@ -160,6 +188,7 @@ def _prepare_case_run(
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
 ) -> tuple[str, ReplayPlan, dict[str, Any]]:
@@ -171,14 +200,19 @@ def _prepare_case_run(
             raise ValueError(f"case not found: {case_id}")
         snapshot = snapshot_of(row)
         run_id = new_id()
-        row.last_status = "running"
-        row.last_run_id = run_id
-        row.last_run_at = utcnow()
-        row.last_results = []
         # 新一次执行开始时就清掉上一次的条件，与清空断言结果同一个道理：执行中途
-        # 停在「正在执行」上的那一刻，不该还挂着上一轮的前提。
-        row.last_condition = None
-        session.add(row)
+        # 停在「正在执行」上的那一刻，不该还挂着上一轮的前提。整条记录一并落下（见
+        # write_case_record）：这里写的 run_id 与「结论还没产生」是同一件事的两面，
+        # 被拆成两列分别提交就会与别的格子写下的结论拼在一起。
+        write_case_record(
+            session,
+            case_id,
+            last_status="running",
+            last_run_id=run_id,
+            last_run_at=utcnow(),
+            last_results=[],
+            last_condition=None,
+        )
 
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
     # 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
@@ -192,6 +226,8 @@ def _prepare_case_run(
         from_seq=from_seq or snapshot["from_seq"] or 1,
         preset=resolved_preset,
         policy=policy or _policy(snapshot.get("policy")),
+        # 上限只约束这一次执行；批量级的聚合预算不在本轮范围（见 issue #12 的非目标）。
+        budget=budget,
         model=model or snapshot.get("model"),
         system_prompt=system_prompt if system_prompt is not None else snapshot.get("system_prompt"),
         labels={"case_id": case_id, "case_name": snapshot["name"]},
@@ -335,21 +371,21 @@ def _store(
 ) -> None:
     try:
         with session_scope() as session:
-            row = get_case(session, case_id)
-            if row is None:
-                return
-            row.last_status = status
-            row.last_run_id = run_id
-            row.last_run_at = utcnow()
-            row.last_results = results
-            # 结论与成因一起落库：不能只有结论、没有成因。
-            row.last_cause = cause.model_dump(mode="json") if cause else None
-            # 条件也一起落库：同一条用例在不同 Prompt 版本下有不同结论，用例页只显示结论
-            # 而不显示前提，就会出现「这条用例上次是什么条件下的结论」这种歧义。
-            # 单条运行不带条件时落 None，而不是替它写一句「沿用用例自身条件」：单条入口
-            # 允许直接传 Prompt 正文做覆盖（不带版本名），凭空补一个条件名会把一次真实
-            # 覆盖描述成「什么都没变」，那比留空更容易误导。
-            row.last_condition = dict(condition) if condition else None
-            session.add(row)
+            write_case_record(
+                session,
+                case_id,
+                last_status=status,
+                last_run_id=run_id,
+                last_run_at=utcnow(),
+                last_results=results,
+                # 结论与成因一起落库：不能只有结论、没有成因。
+                last_cause=cause.model_dump(mode="json") if cause else None,
+                # 条件也一起落库：同一条用例在不同 Prompt 版本下有不同结论，用例页只显示
+                # 结论而不显示前提，就会出现「这条用例上次是什么条件下的结论」这种歧义。
+                # 单条运行不带条件时落 None，而不是替它写一句「沿用用例自身条件」：单条
+                # 入口允许直接传 Prompt 正文做覆盖（不带版本名），凭空补一个条件名会把一次
+                # 真实覆盖描述成「什么都没变」，那比留空更容易误导。
+                last_condition=dict(condition) if condition else None,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("failed to persist case result: %s", exc)

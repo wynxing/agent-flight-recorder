@@ -100,6 +100,47 @@ export interface RunListResponse {
   total: number
 }
 
+/**
+ * 一次回放的硬上限。两个维度都可以不声明——「没声明」不等于「上限为 0」，
+ * 它是「这一维不参与判定」，因此不设上限的回放行为与没有这套能力时一致。
+ */
+export interface ReplayBudget {
+  max_cost_usd?: number | null
+  max_model_calls?: number | null
+}
+
+/**
+ * 回放结束后的预算记账：已用 / 上限 / 是否触顶。
+ * 只有声明过上限的回放才带它——没声明过上限的回放不会凭空多出一个「上限：无」。
+ */
+export interface ReplayBudgetUsage {
+  max_cost_usd?: number | null
+  max_model_calls?: number | null
+  /** 已用：真实发生的模型调用次数。 */
+  model_calls_used: number
+  /** 已用成本（估算）。null = 未知（模型不在价格表内 / 没有 token 记录），不是 0。 */
+  cost_used_usd?: number | null
+  cost_is_estimate: boolean
+  /** 是否触顶。 */
+  exceeded: boolean
+  /** 触顶的那一维；没触顶时为 null。 */
+  stopped_by?: 'model_calls' | 'cost' | null
+  /** 是否存在无法定价的真实调用（成本记成「未知」的原因）。 */
+  cost_unknown: boolean
+  detail: string
+}
+
+/** 提交前的预估。cost_usd 为 null 就是「无法预估」，不是 0。 */
+export interface ReplayEstimateResponse {
+  parent_run_id: string
+  from_seq: number
+  /** 预计真实执行的模型调用次数。 */
+  model_calls: number
+  cost_usd?: number | null
+  cost_is_estimate: boolean
+  detail: string
+}
+
 export interface ReplayMeta {
   complete?: boolean
   /** 结构化成因；服务端已把历史自由文本 reason 归一化到这里。 */
@@ -112,6 +153,8 @@ export interface ReplayMeta {
   first_fork?: Fork | null
   forks?: Fork[]
   verdict?: string
+  /** 预算记账；只有声明了上限的回放才有。 */
+  budget?: ReplayBudgetUsage | null
 }
 
 /**

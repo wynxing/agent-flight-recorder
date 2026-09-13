@@ -155,13 +155,27 @@ def test_submit_returns_immediately_with_the_whole_matrix(client, make_run) -> N
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 4
-    assert body["status"] == "running"
+
+    # 提交时就确定下来的是**分母**。这里刻意不断言「还没跑完」：格子是后台并发跑的，
+    # 从提交返回到这次读取之间引擎完全可能已经跑掉几格（这些格子因为没有可重建的
+    # Agent 而失败得很快），`status` 与 `completed` 因此都是随进度变化的真值。
+    # 一旦把「此刻恰好是 0」写进断言，门禁就会在没有改动任何行为的情况下变红。
+    assert body["status"] in {"running", "finished"}
 
     detail = client.get(f"/v1/suites/{body['suite_id']}").json()
     assert detail["total"] == 4
-    assert detail["completed"] == 0
     assert len(detail["groups"]) == 2
     assert sum(item["total"] for item in detail["groups"]) == 4
+    # completed 是真实的计数：落在 0..total 之间，且与四态计数一致（它不是一个分数）。
+    assert 0 <= detail["completed"] <= detail["total"]
+    assert detail["completed"] == sum(
+        detail["counts"][status] for status in ("passed", "failed", "inconclusive", "error")
+    )
+
+    # 分母不随执行进度改变：再读一次，四态计数可能变了，总数与分组总数不会。
+    later = client.get(f"/v1/suites/{body['suite_id']}").json()
+    assert later["total"] == detail["total"] == 4
+    assert sum(item["total"] for item in later["groups"]) == 4
 
 
 def test_batch_finishes_and_states_its_lifecycle(client, make_run, monkeypatch) -> None:

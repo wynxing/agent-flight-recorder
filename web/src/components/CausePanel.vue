@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { PhInfo, PhProhibit, PhWarningDiamond } from '@phosphor-icons/vue'
+import { PhGauge, PhInfo, PhProhibit, PhWarningDiamond } from '@phosphor-icons/vue'
 import { causeInfo, type InconclusiveCause } from '@/utils/format'
 
 // 一个成因在运行详情页与用例页必须是同一句话、同一个颜色，因此渲染只在这里实现一次。
@@ -9,6 +9,8 @@ const props = defineProps<{ cause?: InconclusiveCause | null; title?: string; co
 const resolved = computed(() => props.cause ?? null)
 const info = computed(() => causeInfo(resolved.value?.code))
 const icon = computed(() => {
+  // 预算触顶与「副作用被拦截」同属「这次执行没有跑完」：同色不同图标，靠标签区分。
+  if (info.value.tone === 'budget') return PhGauge
   if (info.value.tone === 'blocked') return PhProhibit
   if (info.value.tone === 'unknown') return PhInfo
   return PhWarningDiamond
@@ -46,6 +48,10 @@ const icon = computed(() => {
   color: var(--warning);
 }
 .cause.blocked {
+  border-left-color: var(--accent);
+  color: var(--accent-strong);
+}
+.cause.budget {
   border-left-color: var(--accent);
   color: var(--accent-strong);
 }

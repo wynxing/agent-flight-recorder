@@ -13,6 +13,7 @@ import {
 import { api } from '@/api/client'
 import type {
   CaseItem,
+  ReplayBudget,
   SuiteCondition,
   SuiteConditionGroup,
   SuiteConditionInfo,
@@ -126,6 +127,13 @@ function stopSuitePolling() {
 
 async function run(caseId: string) {
   busyCase.value = caseId
+  const invalid = budgetErrorFor(caseId)
+  if (invalid) {
+    // 上限填得不对就不提交：与其跑出一个没人能解释的花费，不如当场说清楚。
+    error.value = invalid
+    busyCase.value = ''
+    return
+  }
   try {
     const presetName = promptChoice.value[caseId] ?? ''
     const item = cases.value.find((entry) => entry.id === caseId)
@@ -135,6 +143,7 @@ async function run(caseId: string) {
     await api.runCase(caseId, {
       system_prompt: systemPrompt,
       preset: systemPrompt ? 'regress' : undefined,
+      budget: budgetForCase(caseId),
     })
     startPolling()
   } catch (cause) {
@@ -268,6 +277,47 @@ const STATUS_TEXTS: Record<SuiteItemStatus, string> = {
 function statusText(status?: string | null) {
   if (!status) return ''
   return STATUS_TEXTS[status as SuiteItemStatus] ?? status
+}
+
+// ------------------------------------------------------------------ 单次执行的预算上限
+//
+// 与运行详情页同一套语义：留空 = 不设上限（不是「上限为 0」）；上限在 SDK 层生效，
+// 触顶时这一次执行停在步边界，结论是「无法判断」而不是「未通过」。
+const budgetFields = ref<Record<string, { cost: string; calls: string }>>({})
+
+function budgetInput(caseId: string) {
+  return budgetFields.value[caseId] ?? { cost: '', calls: '' }
+}
+
+function setBudgetField(caseId: string, field: 'cost' | 'calls', value: string) {
+  budgetFields.value = {
+    ...budgetFields.value,
+    [caseId]: { ...budgetInput(caseId), [field]: value },
+  }
+}
+
+function budgetForCase(caseId: string): ReplayBudget | null {
+  const input = budgetInput(caseId)
+  const budget: ReplayBudget = {}
+  if (input.cost.trim()) budget.max_cost_usd = Number(input.cost.trim())
+  if (input.calls.trim()) budget.max_model_calls = Number(input.calls.trim())
+  return Object.keys(budget).length ? budget : null
+}
+
+function budgetErrorFor(caseId: string): string {
+  const input = budgetInput(caseId)
+  for (const [label, raw] of [
+    ['最大成本', input.cost],
+    ['最大模型调用次数', input.calls],
+  ] as [string, string][]) {
+    const text = raw.trim()
+    if (!text) continue
+    const value = Number(text)
+    if (!Number.isFinite(value) || value < 0) {
+      return `${label}必须是不小于 0 的数字；留空表示不设上限。`
+    }
+  }
+  return ''
 }
 
 function causeOfCase(item: CaseItem) {
@@ -564,6 +614,32 @@ onUnmounted(() => {
               <PhPlay :size="13" weight="bold" />
               {{ busyCase === item.id ? '正在提交' : '运行用例' }}
             </button>
+            <div class="budget-field">
+              <span class="budget-label">预算上限（可选，留空表示不设上限）</span>
+              <div class="budget-inputs">
+                <label>
+                  <span>最大成本（USD）</span>
+                  <input
+                    type="text"
+                    inputmode="decimal"
+                    placeholder="不设上限"
+                    :value="budgetInput(item.id).cost"
+                    @input="setBudgetField(item.id, 'cost', ($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+                <label>
+                  <span>最大模型调用次数</span>
+                  <input
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="不设上限"
+                    :value="budgetInput(item.id).calls"
+                    @input="setBudgetField(item.id, 'calls', ($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+              </div>
+              <span v-if="budgetErrorFor(item.id)" class="budget-error">{{ budgetErrorFor(item.id) }}</span>
+            </div>
             <RouterLink
               v-if="item.last_run_id"
               class="ghost"
@@ -926,6 +1002,40 @@ onUnmounted(() => {
   border-radius: var(--radius-control);
   padding: 6px 9px;
   font-size: var(--step-1);
+}
+.budget-field {
+  display: grid;
+  gap: 4px;
+}
+.budget-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.budget-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.budget-inputs label {
+  display: grid;
+  gap: 4px;
+}
+.budget-inputs label > span {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.budget-inputs input {
+  width: 100%;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  padding: 6px 9px;
+  font-size: var(--step-1);
+}
+.budget-error {
+  font-size: 11px;
+  color: var(--danger);
 }
 .primary,
 .ghost {

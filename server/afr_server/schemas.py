@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from agent_flight_recorder.models import EffectPolicy, Event, ReplayPreset, RunRecord, RunSummary
+from agent_flight_recorder.models import (
+    EffectPolicy,
+    Event,
+    ReplayBudget,
+    ReplayPreset,
+    RunRecord,
+    RunSummary,
+)
 from agent_flight_recorder.replay.reasons import InconclusiveReason
 from pydantic import BaseModel, Field
 
@@ -48,9 +55,22 @@ class ReplayRequest(BaseModel):
     from_seq: int = Field(ge=1)
     preset: ReplayPreset | None = None
     policy: EffectPolicy | None = None
+    #: 硬上限（最大成本 / 最大模型调用次数）。两个都不给就是不设上限。
+    budget: ReplayBudget | None = None
     model: str | None = None
     system_prompt: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
+
+
+class ReplayEstimateResponse(BaseModel):
+    """一次回放的预估。cost_usd 为 null 就是「无法预估」，不是 0。"""
+
+    parent_run_id: str
+    from_seq: int
+    model_calls: int = 0
+    cost_usd: float | None = None
+    cost_is_estimate: bool = True
+    detail: str = ""
 
 
 class ReplayResponse(BaseModel):
@@ -108,6 +128,8 @@ class CaseListResponse(BaseModel):
 class CaseRunRequest(BaseModel):
     from_seq: int | None = None
     preset: ReplayPreset | None = None
+    #: 这一次执行的硬上限。不给就是不设上限（行为与之前一致）。
+    budget: ReplayBudget | None = None
     model: str | None = None
     system_prompt: str | None = None
 
@@ -293,6 +315,7 @@ __all__ = [
     "CaseListResponse",
     "CaseRunRequest",
     "CaseRunResponse",
+    "ReplayEstimateResponse",
     "ReplayRequest",
     "ReplayResponse",
     "RunDetailResponse",

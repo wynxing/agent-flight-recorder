@@ -80,6 +80,29 @@ class ReplayPreset(str, Enum):
     REGRESS = "regress"
 
 
+class ReplayBudget(BaseModel):
+    """一次回放的硬上限：事先声明，执行中在步边界生效。
+
+    两个维度可以单独声明，也可以一起声明。**「没声明」不等于「上限为 0」**：它是
+    「这一维不参与判定」，因此不设上限时回放行为与加入这套能力之前完全一致，复现
+    模式（本来就不花模型钱）也绝不会被预算逻辑误判成触顶。
+
+    上限只约束**真实发生的模型调用**。复现模式整条路径都读录制结果，不产生真实调用，
+    因此既不花成本也不占用调用次数。
+    """
+
+    #: 最大成本（USD，按本地价格表估算）。
+    max_cost_usd: float | None = Field(default=None, ge=0)
+    #: 最大模型调用次数。
+    max_model_calls: int | None = Field(default=None, ge=0)
+
+    @property
+    def is_set(self) -> bool:
+        """是否声明了至少一个上限。两个都不声明就是「不设上限」。"""
+
+        return self.max_cost_usd is not None or self.max_model_calls is not None
+
+
 # attributes 里的保留键。
 ATTR_CHECKPOINT_REF = "checkpoint_ref"
 ATTR_NODE = "node"

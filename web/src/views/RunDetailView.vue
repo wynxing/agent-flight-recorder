@@ -3,7 +3,15 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhArrowsLeftRight, PhArrowClockwise, PhFunnelSimple, PhPlus, PhTestTube } from '@phosphor-icons/vue'
 import { api, streamRun } from '@/api/client'
-import type { AgentEvent, EffectMode, ReplayPreset, RunDetailResponse } from '@/api/types'
+import type {
+  AgentEvent,
+  EffectMode,
+  ReplayBudget,
+  ReplayBudgetUsage,
+  ReplayEstimateResponse,
+  ReplayPreset,
+  RunDetailResponse,
+} from '@/api/types'
 import { useSessionStore } from '@/stores/session'
 import MetricStrip from '@/components/MetricStrip.vue'
 import CausePanel from '@/components/CausePanel.vue'
@@ -30,6 +38,11 @@ const modelOverride = ref('')
 const promptOverride = ref('')
 const promptPreset = ref('')
 const allowSideEffects = ref(false)
+const maxCost = ref('')
+const maxCalls = ref('')
+const estimate = ref<ReplayEstimateResponse | null>(null)
+const estimateBusy = ref(false)
+const estimateError = ref('')
 const stepOverrides = ref<Record<number, EffectMode>>({})
 const showAdvanced = ref(false)
 const replayBusy = ref(false)
@@ -62,6 +75,30 @@ const replayCause = computed(() =>
     ? causeOf(detail.value.replay.cause ?? detail.value.replay.reason)
     : null,
 )
+
+// 预算触顶是第三种结论：它不是失败（状态是已中止），也不是普通的重放未跑完。
+const replayBudget = computed<ReplayBudgetUsage | null>(() => detail.value?.replay?.budget ?? null)
+const stoppedByBudget = computed(() => replayCause.value?.code === 'budget_exceeded')
+
+const budgetLimitText = computed(() => {
+  const budget = replayBudget.value
+  if (!budget) return '-'
+  const parts: string[] = []
+  if (budget.max_model_calls !== null && budget.max_model_calls !== undefined) {
+    parts.push(`${budget.max_model_calls} 次模型调用`)
+  }
+  if (budget.max_cost_usd !== null && budget.max_cost_usd !== undefined) {
+    parts.push(`${money(budget.max_cost_usd)} 成本`)
+  }
+  return parts.length ? parts.join(' · ') : '未设置'
+})
+
+const budgetStopText = computed(() => {
+  const stoppedBy = replayBudget.value?.stopped_by
+  if (stoppedBy === 'model_calls') return '模型调用次数'
+  if (stoppedBy === 'cost') return '成本'
+  return '预算'
+})
 
 const promptPresets = computed(() => agentInfo.value?.prompt_presets ?? {})
 
@@ -145,26 +182,87 @@ function setStepMode(seq: number, mode: EffectMode | '') {
   stepOverrides.value = { ...stepOverrides.value, [seq]: mode }
 }
 
+/** 表单里的上限：两个都留空就是「不设上限」，而不是「上限为 0」。 */
+function budgetPayload(): ReplayBudget | null {
+  const budget: ReplayBudget = {}
+  const cost = maxCost.value.trim()
+  const calls = maxCalls.value.trim()
+  if (cost) budget.max_cost_usd = Number(cost)
+  if (calls) budget.max_model_calls = Number(calls)
+  return Object.keys(budget).length ? budget : null
+}
+
+const budgetError = computed(() => {
+  const fields: [string, string][] = [
+    ['最大成本', maxCost.value],
+    ['最大模型调用次数', maxCalls.value],
+  ]
+  for (const [label, raw] of fields) {
+    const text = raw.trim()
+    if (!text) continue
+    const value = Number(text)
+    if (!Number.isFinite(value) || value < 0) {
+      return `${label}必须是不小于 0 的数字；留空表示不设上限。`
+    }
+  }
+  return ''
+})
+
+function replayPayload() {
+  const byKind: Record<string, EffectMode> =
+    preset.value === 'regress' ? { model_call: 'live' } : {}
+  const policy = {
+    default: 'recorded' as EffectMode,
+    by_kind: byKind,
+    by_seq: Object.fromEntries(Object.entries(stepOverrides.value).map(([k, v]) => [k, v])),
+    allow_side_effect_execution: allowSideEffects.value,
+  }
+  return {
+    from_seq: fromSeq.value,
+    preset: preset.value,
+    policy,
+    budget: budgetPayload(),
+    model: modelOverride.value || undefined,
+    system_prompt: promptOverride.value || undefined,
+  }
+}
+
+/** 预估要花多少。纯计算：服务端不调用模型，也不创建 Run。 */
+async function estimatePlan() {
+  if (budgetError.value) {
+    estimateError.value = budgetError.value
+    return
+  }
+  estimateBusy.value = true
+  estimateError.value = ''
+  try {
+    estimate.value = await api.estimateReplay(runId.value, replayPayload())
+  } catch (cause) {
+    estimate.value = null
+    estimateError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    estimateBusy.value = false
+  }
+}
+
+/** 成本显示：0 是「确实是 0」，未知必须是「未知」，两者不能长成一个样子。 */
+function money(value?: number | null): string {
+  if (value === null || value === undefined) return '未知'
+  if (value === 0) return '$0'
+  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`
+}
+
 async function startReplay() {
+  // 上限填得不对就不提交：宁可当场说清楚，也不要跑出一个没人能解释的花费。
+  if (budgetError.value) {
+    replayError.value = budgetError.value
+    return
+  }
   replayBusy.value = true
   replayError.value = ''
   replayLaunched.value = null
   try {
-    const byKind: Record<string, EffectMode> =
-      preset.value === 'regress' ? { model_call: 'live' } : {}
-    const policy = {
-      default: 'recorded' as EffectMode,
-      by_kind: byKind,
-      by_seq: Object.fromEntries(Object.entries(stepOverrides.value).map(([k, v]) => [k, v])),
-      allow_side_effect_execution: allowSideEffects.value,
-    }
-    const response = await api.replay(runId.value, {
-      from_seq: fromSeq.value,
-      preset: preset.value,
-      policy,
-      model: modelOverride.value || undefined,
-      system_prompt: promptOverride.value || undefined,
-    })
+    const response = await api.replay(runId.value, replayPayload())
     replayLaunched.value = { run_id: response.run_id, plan_summary: response.plan_summary }
   } catch (cause) {
     replayError.value = cause instanceof Error ? cause.message : String(cause)
@@ -245,6 +343,10 @@ onUnmounted(() => {
         <p v-if="detail.run.effect_policy?.allow_side_effect_execution" class="danger-note">
           本次回放允许真实执行副作用。请核对时间线上的告警标记。
         </p>
+        <p v-if="stoppedByBudget" class="budget-note">
+          本次回放因达到预算上限而停止。它被记为「已中止」并判为「无法判断」，不是失败：
+          没有跑完不等于没通过。提高上限或缩小回放范围后可以重跑。
+        </p>
         <p v-if="detail.run.redactions?.length" class="redaction-note">
           入库时命中脱敏规则：{{ detail.run.redactions.join(', ') }}
         </p>
@@ -288,6 +390,38 @@ onUnmounted(() => {
         <section v-if="replayCause" class="panel">
           <h2>无法判断</h2>
           <CausePanel :cause="replayCause" />
+        </section>
+        <section v-if="replayBudget" class="panel">
+          <h2>预算记账</h2>
+          <p class="hint">{{ replayBudget.detail }}</p>
+          <dl class="budget-grid">
+            <div>
+              <dt>已用模型调用</dt>
+              <dd>{{ replayBudget.model_calls_used }} 次</dd>
+            </div>
+            <div>
+              <dt>已用成本</dt>
+              <dd>
+                {{
+                  replayBudget.cost_used_usd === null || replayBudget.cost_used_usd === undefined
+                    ? '未知'
+                    : `${money(replayBudget.cost_used_usd)}（估算）`
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>上限</dt>
+              <dd>{{ budgetLimitText }}</dd>
+            </div>
+            <div>
+              <dt>是否触顶</dt>
+              <dd>{{ replayBudget.exceeded ? `已触顶（${budgetStopText}）` : '未触顶' }}</dd>
+            </div>
+          </dl>
+          <p v-if="replayBudget.cost_unknown" class="tiny">
+            有真实调用无法按本地价格表定价，因此已用成本记为「未知」而不是 0；
+            这一轮无法用成本上限判定，调用次数上限不受影响。
+          </p>
         </section>
         <section v-if="isPi" class="panel">
           <h2>本地 pi 回放</h2>
@@ -382,6 +516,40 @@ onUnmounted(() => {
           <p class="warn-note">
             默认关闭。关闭时，任何要求真实执行的写入或对外动作都会被闸门降级为拦截，并留下告警标记。
           </p>
+
+          <div class="budget">
+            <div class="budget-head">
+              <span>预算上限（可选）</span>
+              <button class="ghost mini" type="button" :disabled="estimateBusy" @click="estimatePlan">
+                {{ estimateBusy ? '正在预估' : '预估花费' }}
+              </button>
+            </div>
+            <label class="field">
+              <span>最大成本（USD）</span>
+              <input v-model="maxCost" type="text" inputmode="decimal" placeholder="留空表示不设上限" />
+            </label>
+            <label class="field">
+              <span>最大模型调用次数</span>
+              <input v-model="maxCalls" type="text" inputmode="numeric" placeholder="留空表示不设上限" />
+            </label>
+            <p class="tiny">
+              上限在 SDK 层生效：达到任一上限就在步边界停止，不再发起新的模型调用；
+              已经发出的那次调用会跑完并如实记账。
+            </p>
+            <p v-if="budgetError" class="error-note">{{ budgetError }}</p>
+            <div v-if="estimate" class="estimate">
+              <p>{{ estimate.detail }}</p>
+              <p class="tiny">
+                预计 {{ estimate.model_calls }} 次真实模型调用 ·
+                {{
+                  estimate.cost_usd === null || estimate.cost_usd === undefined
+                    ? '成本无法预估（缺 token 记录或模型不在价格表内）'
+                    : `估算成本 ${money(estimate.cost_usd)}（估算）`
+                }}
+              </p>
+            </div>
+            <p v-if="estimateError" class="error-note">{{ estimateError }}</p>
+          </div>
 
           <button class="primary block" type="button" :disabled="replayBusy" @click="startReplay">
             {{ replayBusy ? '正在提交' : '发起回放' }}
@@ -485,6 +653,7 @@ onUnmounted(() => {
 }
 .lineage,
 .danger-note,
+.budget-note,
 .redaction-note {
   margin-top: 6px;
   font-size: var(--step-1);
@@ -497,6 +666,10 @@ onUnmounted(() => {
 }
 .redaction-note {
   color: var(--text-faint);
+}
+/* 预算触顶不是失败：用中性的强调色陈述，与红色的失败分开。 */
+.budget-note {
+  color: var(--accent-strong);
 }
 .head-actions {
   display: flex;
@@ -654,6 +827,53 @@ textarea {
 }
 .error-note {
   color: var(--danger);
+}
+.budget {
+  display: grid;
+  gap: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-control);
+  padding: 10px;
+}
+.budget-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.mini {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.estimate {
+  border-left: 2px solid var(--accent-ring);
+  padding-left: 8px;
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.budget-grid {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+.budget-grid > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.budget-grid dt {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.budget-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step-1);
 }
 .primary,
 .ghost {
