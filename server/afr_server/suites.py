@@ -74,11 +74,17 @@ def condition_key(condition: dict[str, Any]) -> str:
 
 
 def condition_label(condition: dict[str, Any]) -> str:
-    """条件的可读标签。两维都要写出来，哪怕某一维是「沿用用例自身」。"""
+    """条件的可读标签：只写这个条件**实际覆盖了**什么。
 
-    prompt = condition.get("prompt") or "默认 Prompt"
-    model = condition.get("model") or "默认模型"
-    return f"{prompt} · {model}"
+    不确定的维度要如实说成「沿用用例自身」，而不是替它起一个名字（例如「默认模型」）：
+    没有覆盖时，每个格子用的是各自用例自己的模型，服务端并不能替它们担保某个「默认」。
+    """
+
+    prompt = condition.get("prompt")
+    model = condition.get("model")
+    if not prompt and not model:
+        return "沿用用例自身条件"
+    return f"{prompt or '沿用用例自身 Prompt'} · {model or '沿用用例自身模型'}"
 
 
 def _requested_conditions(conditions: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -365,6 +371,12 @@ def _group_payload(key: str, items: list[SuiteItemTable]) -> dict[str, Any]:
     counts = _tally(items)
     total = len(items)
     determinable = counts["passed"] + counts["failed"]
+    # 「无法判断」只包括**跑过了、但拿不到可信结论**的格子（inconclusive 与 error）。
+    # 尚未跑完的格子必须另外计数：把「还没跑」写成「拿不到结论」，等于对一个从未执行过的
+    # 格子下了「跑过了、但拿不到」的实质性断言——那句话没有证据支撑。这与本项目的立身之本
+    # （结论只说证据支持的事）冲突，也与第 3 轮把 inconclusive 与 failed 分开的立场同源。
+    undecided = counts["inconclusive"] + counts["error"]
+    unfinished = counts["pending"] + counts["running"]
     condition = dict(items[0].condition or {}) if items else {}
     return {
         "condition_key": key,
@@ -373,12 +385,14 @@ def _group_payload(key: str, items: list[SuiteItemTable]) -> dict[str, Any]:
         "total": total,
         "completed": _completed(counts),
         "counts": counts,
-        # 「拿不到结论」= 总数 − 有结论的（passed + failed）：inconclusive、error 与尚未
-        # 跑完都算。界面据此写出「N 条中 M 条拿不到结论」。
+        # 三个桶互斥且穷尽：total == determinable + undecided + unfinished。
         "determinable": determinable,
-        "undecided": total - determinable,
-        # 可判断率的样本量就是上面这个 total，两者永远一起出现；这里也刻意不给出
-        # 任何跨条件的合计比率。
+        "undecided": undecided,
+        # 「还没跑」不是结论，因此单独给一个字段。界面在未跑完时只能陈述三个桶的计数，
+        # 不能说出「N 条中 M 条拿不到结论」这种只有整批跑完才成立的句子。
+        "unfinished": unfinished,
+        # 可判断率的样本量就是上面这个 total（issue #10 验收 4 明确要求分母是总数），
+        # 两者永远一起出现；这里也刻意不给出任何跨条件的合计比率。
         "determinable_rate": (determinable / total) if total else None,
         "errors": counts["error"],
         "items": [_item_payload(item) for item in items],

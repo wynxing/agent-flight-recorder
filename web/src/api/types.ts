@@ -262,9 +262,11 @@ export interface SuiteItem {
 /**
  * 一个条件的汇总。
  *
- * determinable = passed + failed，undecided 是「拿不到结论」的条数（inconclusive、
- * error 与尚未跑完）。可判断率的分母永远是该条件自己的 total —— 服务端刻意不给出
- * 任何跨条件的合计分数（见 PRD 6.5），界面也不许自己算一个。
+ * 三个桶互斥且穷尽：total === determinable + undecided + unfinished。
+ * undecided 只包括**跑过了、但拿不到可信结论**的格子（inconclusive + error）；
+ * unfinished 是**还没跑完**的格子（pending + running），它没有任何结论，因此不属于
+ * undecided。可判断率的分母永远是该条件自己的 total —— 服务端刻意不给出任何跨条件的
+ * 合计分数（见 PRD 6.5），界面也不许自己算一个。
  */
 export interface SuiteConditionGroup {
   condition_key: string
@@ -275,6 +277,8 @@ export interface SuiteConditionGroup {
   counts: Record<string, number>
   determinable: number
   undecided: number
+  /** 还没跑完的格子数（pending + running）。它不是结论，必须能与 undecided 区分开。 */
+  unfinished: number
   determinable_rate?: number | null
   errors: number
   items: SuiteItem[]

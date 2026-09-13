@@ -24,6 +24,7 @@ import CausePanel from '@/components/CausePanel.vue'
 import StatePanel from '@/components/StatePanel.vue'
 import { useSessionStore } from '@/stores/session'
 import { ASSERTION_LABELS, causeInfo, causeOf, relativeTime, shortId, truncate } from '@/utils/format'
+import { causeDrillLabel, conditionLabel, conditionVerdict, determinableRateText } from '@/utils/suite'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -273,24 +274,24 @@ function causeOfCase(item: CaseItem) {
   return item.last_status === 'inconclusive' ? causeOf(item.last_cause) : null
 }
 
+// 条件的标签只有一套规则（utils/suite.ts），服务端 suites.condition_label() 与它逐字一致，
+// 由跨语言契约测试钉住：控制台不再自己造一份「默认模型」之类的说法。
 function conditionText(condition?: SuiteConditionInfo | SuiteCondition | null) {
-  if (!condition) return '沿用用例自身条件'
-  const prompt = condition.prompt ? String(condition.prompt) : '默认 Prompt'
-  const model = condition.model ? String(condition.model) : '默认模型'
-  return prompt + ' · ' + model
+  return conditionLabel(condition ?? {})
 }
 
 function countOf(group: SuiteConditionGroup, status: SuiteItemStatus) {
   return group.counts[status] ?? 0
 }
 
-function runningCount(group: SuiteConditionGroup) {
-  return countOf(group, 'pending') + countOf(group, 'running')
+// 「还没跑」与「跑到一半拿不到结论」是两件事：判定与文案都在 utils/suite.ts 里，
+// 由跨语言契约测试钉住（server/tests/test_suites.py）。
+function verdictText(group: SuiteConditionGroup) {
+  return conditionVerdict(group)
 }
 
-function rateText(rate?: number | null) {
-  if (rate === null || rate === undefined) return '-'
-  return Math.round(rate * 100) + '%'
+function rateText(group: SuiteConditionGroup) {
+  return determinableRateText(group)
 }
 
 // 每一条的诊断信息：有成因就给成因，否则给第一条没过的断言。
@@ -419,14 +420,18 @@ onUnmounted(() => {
       <ul class="groups">
         <li v-for="group in suite.groups" :key="group.condition_key">
           <header class="group-head">
-            <h3>{{ conditionText(group.condition) }}</h3>
+            <!-- 汇总标签直接用服务端算好的 label：分组的口径只有一处。 -->
+            <h3>{{ group.label }}</h3>
             <span class="progress">{{ group.completed }} / {{ group.total }} 已完成</span>
           </header>
 
+          <!--
+            进行中只说三个桶的计数；只有整批跑完才说「N 条中 M 条拿不到结论」。
+            未跑完的格子从未执行过，不能对它下「拿不到」这个断言。
+          -->
           <p class="verdict-line">
-            {{ group.total }} 条中 {{ group.undecided }} 条拿不到结论
-            <span class="sep">/</span>可判断率 {{ rateText(group.determinable_rate) }}
-            <span class="of">（{{ group.determinable }}/{{ group.total }}）</span>
+            {{ verdictText(group) }}
+            <span class="sep">/</span>可判断率 {{ rateText(group) }}
           </p>
 
           <ul class="counts">
@@ -434,7 +439,8 @@ onUnmounted(() => {
             <li class="failed">未通过 {{ countOf(group, 'failed') }}</li>
             <li class="inconclusive">无法判断 {{ countOf(group, 'inconclusive') }}</li>
             <li class="error">执行出错 {{ countOf(group, 'error') }}</li>
-            <li v-if="runningCount(group)" class="pending">未跑完 {{ runningCount(group) }}</li>
+            <!-- 未完成的格子单列一项，永远不并进「拿不到结论」：它没有结论，不是「拿不到」。 -->
+            <li v-if="group.unfinished" class="pending">未完成 {{ group.unfinished }}</li>
           </ul>
 
           <table class="items">
@@ -473,7 +479,7 @@ onUnmounted(() => {
           </table>
 
           <details v-if="withCause(group).length" class="drill">
-            <summary>展开 {{ withCause(group).length }} 条拿不到结论的成因</summary>
+            <summary>{{ causeDrillLabel(withCause(group).length) }}</summary>
             <div class="drill-body">
               <div v-for="item in withCause(group)" :key="item.id" class="drill-item">
                 <p class="drill-title">
@@ -701,9 +707,6 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: var(--step-1);
   color: var(--text);
-}
-.of {
-  color: var(--text-faint);
 }
 .counts {
   list-style: none;

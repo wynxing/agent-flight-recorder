@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -121,6 +122,19 @@ def _failure_cause() -> Any:
     from agent_flight_recorder.replay.reasons import InconclusiveReason
 
     return InconclusiveReason.from_code("side_effect_blocked", "副作用被闸门拦截，这次执行没有真实发生")
+
+
+class _ImmediateThreads:
+    """把格子放进各自的 daemon 线程里跑。
+
+    直接用 ThreadPoolExecutor 会有个副作用：线程池在解释器退出时会被 join，测试若提前
+    失败，那个等超时的线程会把整个测试挂住几十秒。daemon 线程没有这个问题。
+    """
+
+    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> threading.Thread:
+        thread = threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
+        thread.start()
+        return thread
 
 
 # ------------------------------------------------------------------ 生命周期与矩阵
@@ -290,6 +304,76 @@ def test_summary_is_split_by_condition_and_never_composes_a_score(client, make_r
         assert group["counts"]["passed"] + group["counts"]["failed"] == group["determinable"]
 
 
+def test_unfinished_cells_are_never_counted_as_undecided(client, make_run, monkeypatch) -> None:
+    """「还没跑」与「跑了但拿不到结论」必须是两个数，不能合成一个。
+
+    这条守的是一个**表述缺陷**（issue #10 审核发现）：未完成的格子从未执行过、没有任何
+    结论，如果把 total - determinable 直接叫「拿不到结论」，界面在批次进行中就会对一堆
+    还没跑过的格子下「拿不到」这个断言——那是「跑过了、但拿不到」才成立的说法。
+
+    因此三个桶互斥且穷尽：total == determinable + undecided + unfinished；
+    undecided 只含真的没有可信结论的（inconclusive + error）。
+    """
+
+    from afr_server import suites
+
+    rows = _create_cases(client, make_run, count=4)
+    # 让最后一格堵住、其余格立刻出结论：这样中途状态是「有的完成了、有的还没完成」，
+    # 与真实批次进行中的样子一致。
+    stalling_case = rows[-1]["id"]
+    released = threading.Event()
+
+    def plan(case_id: str, condition: dict) -> tuple:
+        if case_id == stalling_case:
+            released.wait(timeout=30)
+        return ("passed", None)
+
+    _install_runner(monkeypatch, plan)
+    # 每个格子一个 daemon 线程：解释器退出时不会被 join 拖住，测试提前失败也不会卡住。
+    monkeypatch.setattr(suites, "_executor", _ImmediateThreads())
+
+    suite_id = client.post(
+        "/v1/suites",
+        json={"case_ids": [row["id"] for row in rows], "conditions": [{"model": "m"}]},
+    ).json()["suite_id"]
+
+    deadline = time.monotonic() + 30
+    group: dict[str, Any] = {}
+    mid: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        mid = client.get(f"/v1/suites/{suite_id}").json()
+        group = _group(mid, model="m")
+        # 等到「至少一格出结论」且「至少一格还没完成」的那一刻。
+        if group["completed"] >= 1 and group["unfinished"] >= 1:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"批次没有进入混合的中途状态：{mid}")
+
+    # 中途：确实同时存在已出结论与未完成的格子。
+    assert mid["status"] == "running"
+    assert group["unfinished"] >= 1
+    assert group["determinable"] >= 1
+
+    # 关键断言：未完成的格子不能被算成「拿不到结论」。
+    assert group["undecided"] == group["counts"]["inconclusive"] + group["counts"]["error"]
+    assert group["unfinished"] == group["counts"]["pending"] + group["counts"]["running"]
+    assert group["undecided"] == 0, "这一批没有任何格子真的拿不到结论"
+    # determinable 也不含未完成（它只由 passed + failed 构成）。
+    assert group["determinable"] == group["counts"]["passed"] + group["counts"]["failed"]
+    assert group["determinable"] + group["undecided"] + group["unfinished"] == group["total"]
+
+    # 未完成的格子上没有成因：成因只属于「跑过了但没有可信结论」的那两类。
+    for item in group["items"]:
+        assert (item["cause"] is not None) == (item["status"] in {"inconclusive", "error"})
+
+    released.set()
+    done = _await_suite(client, suite_id)
+    finished = _group(done, model="m")
+    assert finished["unfinished"] == 0
+    assert finished["determinable"] + finished["undecided"] == finished["total"]
+
+
 def test_duplicate_conditions_collapse_into_one_column(client, make_run, monkeypatch) -> None:
     """同一个条件提交两次只应得到一列：两列一模一样的结果谁也说不清该看哪一列。"""
 
@@ -307,6 +391,33 @@ def test_duplicate_conditions_collapse_into_one_column(client, make_run, monkeyp
     assert body["total"] == 1
     detail = _await_suite(client, body["suite_id"])
     assert len(detail["groups"]) == 1
+
+
+def test_condition_label_only_states_what_was_actually_requested() -> None:
+    """条件标签不能替没覆盖的维度起一个名字。
+
+    没写模型时，每个格子用的是各自用例自己的模型，服务端担保不了某个「默认模型」，
+    因此只能说「沿用用例自身」——标签同样适用「只讲证据支持的事」这条标准。
+    """
+
+    from afr_server.suites import condition_label
+
+    assert condition_label({}) == "沿用用例自身条件"
+    assert condition_label({"prompt": "grounded"}) == "grounded · 沿用用例自身模型"
+    assert condition_label({"prompt": "v1", "model": "m"}) == "v1 · m"
+    assert condition_label({"model": "m"}) == "沿用用例自身 Prompt · m"
+
+    # 用例页上「最近一次条件」那一行用的是控制台的同一套规则，两侧必须逐字一致，
+    # 否则同一条用例在汇总表与用例列表里会显示成两个不同的条件。
+    console = _console_labels(
+        [{}, {"prompt": "grounded"}, {"prompt": "v1", "model": "m"}, {"model": "m"}]
+    )
+    assert console == [
+        condition_label({}),
+        condition_label({"prompt": "grounded"}),
+        condition_label({"prompt": "v1", "model": "m"}),
+        condition_label({"model": "m"}),
+    ]
 
 
 # ------------------------------------------------------------------ 四态分列与失败可诊断
@@ -373,6 +484,57 @@ def test_a_failing_item_does_not_break_the_batch(client, make_run, monkeypatch) 
 
 
 # ------------------------------------------------------------------ 请求校验与既有语义
+
+
+def test_condition_reached_the_latest_run_but_not_a_new_unlabelled_one(
+    client, make_run, monkeypatch
+) -> None:
+    """条件只属于它实际跑过的那一次执行，不会粘到下一次单条运行上。
+
+    单条运行允许直接传 Prompt 正文做覆盖（不带版本名），所以它没有可记的条件名。若不清
+    掉上一次的条件，界面就会把这次「没有具名条件」的执行显示成「最近一次条件：grounded」，
+    凭空替一次真实覆盖写了一个它没有的前提。docs/protocol.md 第 7 节明文承诺了这条语义。
+
+    观察点是**执行中的那一刻**，而不是结束之后：结论落库时本就会连条件一起写，所以只有
+    在「已开始、还没出结论」的窗口里，「沿用上一轮条件」这个缺陷才会露出来——那也正是
+    用户会看到它的时刻（卡片上写着「正在执行」）。
+    """
+
+    rows = _create_cases(client, make_run, count=1)
+    case_id = rows[0]["id"]
+
+    # 带条件跑一次（没有注册可重建的 Agent，因此落的是 error 结论，但条件照样落库）。
+    condition = {"prompt": "v1", "model": None, "system_prompt": "PROMPT V1", "preset": "regress"}
+    from afr_server import cases as cases_module
+
+    cases_module.run_case_blocking(case_id, condition=condition)
+    assert client.get(f"/v1/cases/{case_id}").json()["last_condition"] == condition
+
+    # 第二次执行：卡在执行中，好观察「已开始、还没出结论」的那个窗口。
+    stalling = threading.Event()
+    entered = threading.Event()
+
+    def stall(*args, **kwargs):
+        entered.set()
+        stalling.wait(timeout=30)
+
+    monkeypatch.setattr(cases_module, "_execute", stall)
+    worker = threading.Thread(
+        target=lambda: cases_module.run_case_blocking(case_id), daemon=True
+    )
+    worker.start()
+    try:
+        assert entered.wait(timeout=30), "第二次执行没有开始"
+        running = client.get(f"/v1/cases/{case_id}").json()
+        assert running["last_status"] == "running"
+        # 关键断言：执行中不能还挂着上一轮的条件。
+        assert running["last_condition"] is None
+    finally:
+        stalling.set()
+        worker.join(timeout=30)
+
+    # 跑完之后也不能凭空补一个条件。
+    assert client.get(f"/v1/cases/{case_id}").json()["last_condition"] is None
 
 
 def test_unknown_case_is_rejected(client, make_run) -> None:
@@ -522,3 +684,137 @@ def _wait_for_seeded_case(client: Any, timeout: float = 120.0) -> dict[str, Any]
             return cases[0]
         time.sleep(0.2)
     raise AssertionError(f"播种未在 {timeout:.0f}s 内产出用例结论")
+
+
+# ------------------------------------------------------------------ 控制台文案的跨语言契约
+
+
+def _run_console_module(*, groups: Any = None, conditions: Any = None) -> Any:
+    """真的执行控制台的文案模块，再把结果交回 Python。
+
+    `web/src/utils/suite.ts` 没有任何 import，可以被 node 直接执行（Node 24 的
+    type stripping）。抄一份期待值只能证明抄对了；执行真模块才能钉住文案本身。
+    """
+
+    import json
+    import shutil
+    import subprocess
+
+    if not shutil.which("node"):
+        pytest.skip("install node to run the console wording contract")
+
+    root = Path(__file__).resolve().parents[2]
+    script = (
+        "import { conditionVerdict, determinableRateText, causeDrillLabel, conditionLabel } "
+        "from './web/src/utils/suite.ts';"
+        "let raw = '';"
+        "process.stdin.setEncoding('utf8');"
+        "process.stdin.on('data', (chunk) => { raw += chunk; });"
+        "process.stdin.on('end', () => {"
+        "  const payload = JSON.parse(raw);"
+        "  const groups = payload.groups ?? [];"
+        "  const conditions = payload.conditions ?? [];"
+        "  console.log(JSON.stringify({"
+        "    groups: groups.map((g) => ({"
+        "      verdict: conditionVerdict(g), rate: determinableRateText(g),"
+        "      drill: causeDrillLabel(g.undecided),"
+        "    })),"
+        "    labels: conditions.map((c) => conditionLabel(c)),"
+        "  }));"
+        "});"
+    )
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", script],
+        cwd=root,
+        # 走 stdin 而不是命令行参数：node --eval 下多余参数会落在 argv[1] 而不是 argv[2]，
+        # 用 stdin 就没有这层歧义。
+        input=json.dumps(
+            {"groups": list(groups or []), "conditions": list(conditions or [])}
+        ),
+        capture_output=True,
+        encoding="utf-8",
+        check=True,
+        timeout=60,
+    )
+    return json.loads(result.stdout)
+
+
+def _console_verdict(progress: dict[str, Any]) -> dict[str, Any]:
+    """一个条件的四句文案，全部来自真的执行控制台模块。"""
+
+    return _run_console_module(groups=[progress])["groups"][0]
+
+
+def _console_labels(conditions: list[dict[str, Any]]) -> list[str]:
+    """控制台对一组条件给出的标签。"""
+
+    return _run_console_module(conditions=conditions)["labels"]
+
+
+def test_console_never_calls_unfinished_cells_undecided() -> None:
+    """进行中不得把「还没跑」说成「拿不到结论」，跑完了才允许说。
+
+    这条直接跑控制台的文案函数，因此把模板里的措辞改回收工前那种写法（无论进度都输出
+    「N 条中 N 条拿不到结论」）会让它变红。
+    """
+
+    # 提交瞬间：一条都还没跑完。
+    just_submitted = _console_verdict(
+        {
+            "total": 5,
+            "completed": 0,
+            "determinable": 0,
+            "undecided": 0,
+            "unfinished": 5,
+            "determinable_rate": 0.0,
+        }
+    )
+    assert "拿不到结论" not in just_submitted["verdict"]
+    assert "未完成 5" in just_submitted["verdict"]
+    # 样本量与百分比一起出现，且分母是这条用例自己的总数。
+    assert just_submitted["rate"] == "0%（0/5）"
+
+    # 进行中：有格子跑完了，但也还有没跑完的。
+    running = _console_verdict(
+        {
+            "total": 5,
+            "completed": 2,
+            "determinable": 2,
+            "undecided": 0,
+            "unfinished": 3,
+            "determinable_rate": 0.4,
+        }
+    )
+    assert "拿不到结论" not in running["verdict"]
+    assert running["verdict"] == "共 5 条：已完成 2、未完成 3"
+    assert running["rate"] == "40%（2/5）"
+
+    # 真的出现「无法判断」但仍有格子没跑完时，也还不允许说「拿不到结论」。
+    partial = _console_verdict(
+        {
+            "total": 4,
+            "completed": 3,
+            "determinable": 1,
+            "undecided": 2,
+            "unfinished": 1,
+            "determinable_rate": 0.25,
+        }
+    )
+    assert "拿不到结论" not in partial["verdict"]
+    assert "未完成 1" in partial["verdict"]
+
+    # 整批跑完：这时才允许说「N 条中 M 条拿不到结论」，M 就是 undecided。
+    finished = _console_verdict(
+        {
+            "total": 4,
+            "completed": 4,
+            "determinable": 3,
+            "undecided": 1,
+            "unfinished": 0,
+            "determinable_rate": 0.75,
+        }
+    )
+    assert finished["verdict"] == "4 条中 1 条拿不到结论"
+    assert finished["rate"] == "75%（3/4）"
+    # 下钻入口与汇总句用同一个短语、同一个数。
+    assert finished["drill"] == "展开 1 条拿不到结论的成因"

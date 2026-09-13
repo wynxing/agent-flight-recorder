@@ -160,7 +160,12 @@ class SuiteConditionGroup(BaseModel):
     """一个条件的汇总。
 
     只有四态计数与该条件自己的可判断率：这里没有任何跨条件的合计分数，分母就是
-    该条件自己的 total。determinable = passed + failed，undecided 是拿不到结论的条数。
+    该条件自己的 total。
+
+    三个桶互斥且穷尽：total == determinable + undecided + unfinished。
+    undecided 只包括**跑过了、但拿不到可信结论**的格子（inconclusive + error）；
+    unfinished 是**还没跑完**的格子（pending + running），它没有任何结论，因此不能
+    被算进 undecided——把「还没跑」写成「拿不到结论」是对从未执行过的格子下断言。
     """
 
     condition_key: str
@@ -171,6 +176,7 @@ class SuiteConditionGroup(BaseModel):
     counts: dict[str, int] = Field(default_factory=dict)
     determinable: int
     undecided: int
+    unfinished: int = 0
     determinable_rate: float | None = None
     errors: int
     items: list[SuiteItem] = Field(default_factory=list)
