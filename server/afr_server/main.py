@@ -293,6 +293,8 @@ def start_replay(run_id: str, payload: ReplayRequest) -> ReplayResponse:
         if row is None:
             raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
         agent_name = row.agent_name
+        if (row.meta or {}).get("runtime") == "pi":
+            raise HTTPException(status_code=409, detail="pi 回放请使用 integrations/pi 本地运行器；服务端不执行 Node。")
         events = get_events(session, run_id)
         max_seq = max((event.seq for event in events), default=0)
 

@@ -53,6 +53,7 @@ const visibleEvents = computed(() =>
 const snapshotCount = computed(() => events.value.filter((event) => event.type === 'state_snapshot').length)
 
 const agentInfo = computed(() => session.agents.find((item) => item.name === detail.value?.run.agent_name))
+const isPi = computed(() => detail.value?.run.metadata.runtime === 'pi')
 
 const promptPresets = computed(() => agentInfo.value?.prompt_presets ?? {})
 
@@ -269,14 +270,25 @@ onUnmounted(() => {
             :key="event.seq"
             :event="event"
             :highlight="event.seq === fromSeq"
-            pinnable
+            :pinnable="!isPi"
             @pick="pickStep"
           />
         </ul>
       </section>
 
       <aside class="side">
-        <section class="panel">
+        <section v-if="detail.replay?.complete === false" class="panel">
+          <h2>无法判断</h2>
+          <p class="warn-note">录制或执行上下文不完整：{{ detail.replay.reason }}</p>
+        </section>
+        <section v-if="isPi" class="panel">
+          <h2>本地 pi 回放</h2>
+          <p class="hint">在 integrations/pi 中运行，替换文件名为本次保存的回放包。仅支持从任务起点回放。</p>
+          <code>npm start -- replay --bundle run.json --mode regress --out replay.json</code>
+          <h2>创建本地用例</h2>
+          <code>npm start -- case create --bundle run.json --assertions assertions.json --out case.json</code>
+        </section>
+        <section v-if="!isPi" class="panel">
           <h2>回放</h2>
           <p class="hint">
             分叉点之前的步骤一律按录制结果复现，不产生任何真实调用；分叉点之后按下面的策略执行。
@@ -379,7 +391,7 @@ onUnmounted(() => {
           </p>
         </section>
 
-        <section class="panel">
+        <section v-if="!isPi" class="panel">
           <h2>沉淀为回归用例</h2>
           <p class="hint">
             把这次失败固定成带断言的用例。断言是确定性的，重跑后会给出明确的通过或失败。

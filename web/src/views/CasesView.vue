@@ -130,7 +130,7 @@ onUnmounted(stopPolling)
                   ? '正在执行'
                   : item.last_status === 'error'
                     ? '执行出错'
-                    : '未通过'
+                    : item.last_status === 'inconclusive' ? '无法判断' : '未通过'
             }}
           </span>
         </div>

@@ -170,6 +170,10 @@ def execute_replay(plan: ReplayPlan, replay_run_id: str):
     finally:
         recorder.close()
 
+    if recorder.stats.events_dropped or recorder.stats.batches_failed:
+        result.complete = False
+        result.reason = "replay_recording_loss"
+
     with session_scope() as db:
         update_run_metadata(
             db,
@@ -182,6 +186,8 @@ def execute_replay(plan: ReplayPlan, replay_run_id: str):
                     "first_fork": result.first_fork.model_dump(mode="json") if result.first_fork else None,
                     "forks": [fork.model_dump(mode="json") for fork in result.forks],
                     "verdict": result.status,
+                    "complete": result.complete,
+                    "reason": result.reason,
                 }
             },
         )

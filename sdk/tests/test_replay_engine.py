@@ -74,6 +74,18 @@ def test_args_key_ignores_key_order() -> None:
     assert args_key({"b": 1, "a": 2}) == args_key({"a": 2, "b": 1})
 
 
+def test_mutating_step_beyond_parent_tail_uses_gate() -> None:
+    policy = EffectPolicy(default=EffectMode.LIVE)
+    session = ReplaySession(ReplayPlan(parent_run_id="parent", from_seq=1, policy=policy), parent_run(), [])
+    step = session.next_step("tool_call", side_effect=SideEffect.WRITE)
+    assert step.mode == EffectMode.DRY_RUN
+    assert step.warn and step.downgraded
+    policy.allow_side_effect_execution = True
+    step = session.next_step("tool_call", side_effect=SideEffect.EXTERNAL)
+    assert step.mode == EffectMode.LIVE
+    assert step.warn
+
+
 def test_recorded_tool_result_is_found_by_name_and_args() -> None:
     effects = RecordedEffects(parent_events())
     found = effects.find_tool_result("prometheus_query", {"q": "latency"})

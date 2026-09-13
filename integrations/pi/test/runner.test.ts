@@ -1,0 +1,107 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { fresh, clone, Tape, Incomplete, confined, rejectLinks, redact, payload, save, load } from '../src/core.ts';
+import { run, assertNoCommandExecution } from '../src/runner.ts';
+import { evaluate } from '../src/cases.ts';
+
+function response(content:any[],stopReason='stop') {
+  const m:any={role:'assistant',content,api:'openai-completions',provider:'test',model:'test',
+    usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason,timestamp:123};
+  const s=createAssistantMessageEventStream();
+  queueMicrotask(()=>{s.push({type:'done',reason:stopReason as any,message:m});s.end(m);});
+  return s;
+}
+test('real pi SDK records read, reproduces without checkout or provider, and stops on changed args',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'msee-test-'));
+  try {
+    await writeFile(path.join(root,'example.txt'),'repository evidence');
+    const b=fresh('Investigate','Use read.','test','test','abc');let calls=0;
+    await run({bundle:b,root,stream:()=> ++calls===1
+      ? response([{type:'toolCall',id:'call-1',name:'read',arguments:{path:'example.txt'}}],'toolUse')
+      : response([{type:'text',text:'Evidence found'}])});
+    assert.equal(b.status,'succeeded',b.reason);
+    assert.deepEqual(b.steps.map(s=>s.kind),['model_call','tool_call','model_call']);
+    assert.match(JSON.stringify(b.steps[1].output),/repository evidence/);
+    const replay=fresh(b.task,b.prompt,b.provider,b.model,b.commit);replay.mode='reproduce';
+    await run({bundle:replay,parent:b,stream:()=>{throw new Error('provider must not run');}});
+    assert.equal(replay.status,'succeeded',replay.reason);
+    assert.equal(replay.final,b.final);
+    assert.deepEqual(replay.steps,b.steps);
+    const regress=fresh(b.task,b.prompt,b.provider,b.model,b.commit);regress.mode='regress';
+    await run({bundle:regress,parent:b,stream:()=>response([{type:'toolCall',id:'new',name:'read',arguments:{path:'other.txt'}}],'toolUse')});
+    assert.equal(regress.complete,false);
+    assert.equal(regress.verdict,'inconclusive');
+    assert.match(regress.reason!,/no_recording/);
+    assert.equal(evaluate(regress,[{type:'final_output_not_contains',value:'unrelated'}]).verdict,'inconclusive');
+    const file=path.join(root,'bundle.json');await save(file,b);assert.equal((await load(file)).id,b.id);
+    const protocol=payload(replay);assert.equal(protocol.protocol_version,1);assert.equal(protocol.events.length,5);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+test('exact tape consumes repeated arguments once and rejects early end',()=>{
+  const step:any={kind:'tool_call',name:'read',input:{path:'a'},output:1,duration_ms:0};
+  const tape=new Tape([step,{...step,output:2}]);
+  assert.equal(tape.take('tool_call','read',{path:'a'}).output,1);
+  assert.throws(()=>tape.finish(),Incomplete);
+  assert.equal(tape.take('tool_call','read',{path:'a'}).output,2);tape.finish();
+  assert.throws(()=>tape.take('tool_call','read',{path:'a'}),Incomplete);
+});
+test('path traversal, symlinks and Windows junctions are rejected',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'msee-path-'));
+  const outside=await mkdtemp(path.join(os.tmpdir(),'msee-outside-'));
+  try {
+    await writeFile(path.join(root,'ok'),'x');assert.equal(await confined(root,'ok'),path.join(root,'ok'));
+    await assert.rejects(confined(root,'../outside'));
+    await symlink(outside,path.join(root,'escape'),process.platform==='win32'?'junction':'dir');
+    await assert.rejects(confined(root,'escape'));await assert.rejects(rejectLinks(root));
+  } finally {await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+});
+test('redacted content cannot be used as a complete recording',async()=>{
+  assert.equal(redact({authorization:'test',text:'sk-abcdefghijklmnop'}).changed,true);
+  const root=await mkdtemp(path.join(os.tmpdir(),'msee-redact-'));
+  try { const b=fresh('sk-abcdefghijklmnop','p','p','m','c');const file=path.join(root,'x.json');
+    const saved=await save(file,b);assert.equal(saved.complete,false);await assert.rejects(load(file),Incomplete);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+test('models.json command execution is refused',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'msee-models-'));
+  try {
+    const file=path.join(root,'models.json');
+    await writeFile(file,JSON.stringify({providers:{p:{baseUrl:'https://example.invalid/v1',api:'openai-completions',apiKey:"!op read 'x'",models:[{id:'m'}]}}}));
+    await assert.rejects(assertNoCommandExecution(file),/command execution is not allowed/);
+    await writeFile(file,JSON.stringify({providers:{p:{baseUrl:'https://example.invalid/v1',api:'openai-completions',apiKey:'$MSEE_PI_GATEWAY_KEY',models:[{id:'m'}]}}}));
+    await assertNoCommandExecution(file);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+test('model budget, truncation and early replay termination are diagnostic',async()=>{
+  const b=fresh('t','p','t','t','c');b.mode='regress';
+  await run({bundle:b,stream:()=>response([{type:'text',text:'cut'}],'length')});
+  assert.equal(b.verdict,'inconclusive');assert.equal(b.reason,'model_output_truncated');
+  const parent=fresh('t','p','t','t','c');parent.steps=[{kind:'tool_call',name:'read',input:{path:'x'},output:{},duration_ms:0}];
+  const bad=clone(parent);bad.steps=[];bad.mode='reproduce';
+  await run({bundle:bad,parent});assert.equal(bad.verdict,'inconclusive');
+});
+
+test('budgets stop the actual SDK loop and provider errors remain errors',async()=>{
+  const parent=fresh('t','p','t','t','c');
+  parent.steps=[{kind:'tool_call',name:'read',input:{path:'x'},output:{content:[{type:'text',text:'x'}]},duration_ms:0}];
+  const b=fresh('t','p','t','t','c');b.mode='regress';
+  await run({bundle:b,parent,maxModels:1,stream:()=>response([{type:'toolCall',id:'c',name:'read',arguments:{path:'x'}}],'toolUse')});
+  assert.equal(b.status,'aborted');assert.equal(b.reason,'model_budget_exceeded');
+  const failed=fresh('t','p','t','t','c');failed.mode='regress';
+  await run({bundle:failed,stream:()=>{throw new Error('provider unavailable');}});
+  assert.equal(failed.verdict,'error');assert.equal(failed.reason,'provider unavailable');
+  assert.equal(failed.steps[0].error,'provider unavailable');
+  const timed=fresh('t','p','t','t','c');timed.mode='regress';
+  await run({bundle:timed,timeoutMs:15,stream:(_m:any,_c:any,o:any)=>{
+    const stream=createAssistantMessageEventStream();
+    o.signal.addEventListener('abort',()=>{
+      const m:any={role:'assistant',content:[],stopReason:'aborted',errorMessage:'cancelled',timestamp:1};
+      stream.push({type:'error',reason:'aborted',error:m});stream.end(m);
+    });return stream;
+  }});
+  assert.equal(timed.status,'aborted');assert.equal(timed.reason,'time_budget_exceeded');
+});

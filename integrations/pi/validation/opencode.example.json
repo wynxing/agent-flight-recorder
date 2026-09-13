@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "opencode": {
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "api": "openai-completions",
+      "apiKey": "$MSEE_PI_GATEWAY_KEY",
+      "models": [
+        { "id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "reasoning": true, "input": ["text"], "contextWindow": 200000, "maxTokens": 32000 }
+      ]
+    }
+  }
+}

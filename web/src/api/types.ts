@@ -101,6 +101,8 @@ export interface RunListResponse {
 }
 
 export interface ReplayMeta {
+  complete?: boolean
+  reason?: string
   parent_run_id?: string
   from_seq?: number
   policy?: EffectPolicy
@@ -199,7 +201,7 @@ export interface CaseItem {
   policy?: EffectPolicy | null
   model?: string | null
   system_prompt?: string | null
-  last_status?: string | null
+  last_status?: 'running' | 'passed' | 'failed' | 'inconclusive' | 'error' | null
   last_run_id?: string | null
   last_run_at?: string | null
   last_results: AssertionResult[]

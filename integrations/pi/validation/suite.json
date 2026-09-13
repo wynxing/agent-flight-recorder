@@ -1,0 +1,43 @@
+{
+  "commit": "da1038c15ad5f010416924270ff4a0e17a15169f",
+  "tasks": [
+    {
+      "id": "tail-gate",
+      "question": "当回放超出父运行的最后一个行为步骤、策略为 live 且未允许副作用时，新增 write 工具步骤是否仍会经过副作用闸门？回答布尔值。",
+      "files": ["sdk/agent_flight_recorder/replay/engine.py"],
+      "answer": false,
+      "evidence": [{"path":"sdk/agent_flight_recorder/replay/engine.py","line":166,"quote":"mode = self.plan.policy.resolve_mode(seq=0, kind=kind)"}]
+    },
+    {
+      "id": "initial-state",
+      "question": "run_replay 未传 initial_state 时，默认初始状态是否会恢复录制时的完整 input 或 checkpoint？回答布尔值。",
+      "files": ["sdk/agent_flight_recorder/replay/langgraph_adapter.py"],
+      "answer": false,
+      "evidence": [{"path":"sdk/agent_flight_recorder/replay/langgraph_adapter.py","line":474,"quote":"return {\"messages\": [HumanMessage(content=task)]}"}]
+    },
+    {
+      "id": "case-completeness",
+      "question": "缺少工具录制结果时，如果 Agent 继续执行并成功结束且断言全部通过，用例是否仍可能被判通过？回答布尔值，并同时引用合成工具消息状态与用例通过条件。",
+      "files": ["sdk/agent_flight_recorder/replay/langgraph_adapter.py","server/afr_server/cases.py"],
+      "answer": true,
+      "evidence": [
+        {"path":"sdk/agent_flight_recorder/replay/langgraph_adapter.py","line":276,"quote":"status=\"success\","},
+        {"path":"server/afr_server/cases.py","line":207,"quote":"passed = bool(results) and all(item.passed for item in results) and result.status == \"succeeded\""}
+      ]
+    },
+    {
+      "id": "tool-consumption",
+      "question": "同名同参数的历史工具结果被匹配一次后，后续调用是否还能再次消费这同一条结果？回答布尔值，引用消费标记的代码。",
+      "files": ["sdk/agent_flight_recorder/replay/effects.py"],
+      "answer": false,
+      "evidence": [{"path":"sdk/agent_flight_recorder/replay/effects.py","line":120,"quote":"self._used.add(chosen)"}]
+    },
+    {
+      "id": "case-exception",
+      "question": "cases._job 捕获执行异常后，将用例的 last_status 保存为什么字符串？仅回答该状态字符串。",
+      "files": ["server/afr_server/cases.py"],
+      "answer": "error",
+      "evidence": [{"path":"server/afr_server/cases.py","line":189,"quote":"\"error\","}]
+    }
+  ]
+}

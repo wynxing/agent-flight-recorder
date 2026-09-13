@@ -1,8 +1,8 @@
 # Agent Flight Recorder 上报协议 v1
 
-本文档冻结 SDK 与平台之间的数据契约。协议版本为 `1`，通过 HTTP 传输，载荷为 JSON。
+本文档描述实验阶段 SDK 与平台之间的数据契约。协议版本为 `1`，通过 HTTP 传输，载荷为 JSON。
 
-协议一旦冻结，新增语言 SDK 只是新增一个客户端，不需要改动服务端。TS SDK 不在本轮范围内，但协议先立住。
+pi TypeScript 运行器复用当前协议；通用 TS SDK 不在本轮范围内。新增适配器仍需验证回放上下文，不以 HTTP 兼容性代替语义兼容性。
 
 ## 1. 传输
 
@@ -106,7 +106,7 @@ Run 表示一次完整的 Agent 执行。回放产生的是**新的 Run**，不�
 | `write` | 修改内部状态 | 强制 `dry_run` |
 | `external` | 触发对外动作（发消息、开工单、部署） | 强制 `dry_run` |
 
-`write` / `external` 在回放中默认被强制降级为 `dry_run`，无论上层策略写了什么。要真实执行必须同时满足：`allow_side_effect_execution = true` **且** 该步的策略显式为 `live`。真实执行时引擎必须写入一条高可见度的告警事件（`attributes.severity = "warning"`），使这次副作用在时间线上无法被忽略。
+`write` / `external` 在回放中默认被强制降级为 `dry_run`，仅在该步请求 live 时；recorded 继续读取录制结果。要真实执行必须同时满足：`allow_side_effect_execution = true` **且** 该步的策略显式为 `live`。真实执行时引擎必须写入一条高可见度的告警事件（`attributes.severity = "warning"`），使这次副作用在时间线上无法被忽略。
 
 ## 3. Event
 
@@ -172,3 +172,9 @@ Event 是 append-only 的。写入后不再修改。
 - 服务端接受 `protocol_version <= 1`，对未知字段采取忽略策略（前向兼容）。
 - 新增可选字段不递增版本号。
 
+
+## 6. 实验性完整性元数据
+
+Run 状态枚举不变。`metadata.afr_recording.complete=false` 表示 SDK 已知录制丢失；回放还会检查事件边界、序列缺口和脱敏。
+`metadata.afr_replay` 可包含 `complete`、`reason` 和 `verdict`。用例结论为 passed / failed / inconclusive / error，运行 succeeded 不能单独证明评测通过。
+pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器回放并产生新的 parent_run_id。
