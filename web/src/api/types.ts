@@ -217,7 +217,10 @@ export interface CaseItem {
   last_run_id?: string | null
   last_run_at?: string | null
   last_results: AssertionResult[]
-  /** 最近一次结论的成因；结论不是 inconclusive 时为 null。 */
+  /**
+   * 最近一次结论的成因；结论为 passed / failed 时为 null。
+   * 也就是说 inconclusive 与 error 都会带上它：error 的 code 说明为什么没有可信结论。
+   */
   last_cause?: InconclusiveCause | null
   created_at?: string | null
   source_run?: RunRecord | null

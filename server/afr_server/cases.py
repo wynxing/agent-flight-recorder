@@ -252,6 +252,14 @@ def _execute(plan, run_id: str, case_id: str, snapshot: dict[str, Any]) -> None:
     verdict = "inconclusive" if cause is not None else (
         "error" if result.status != "succeeded" else ("passed" if passed else "failed")
     )
+    if verdict == "error" and cause is None:
+        # 契约：结论不是 passed / failed 时必须非空（docs/protocol.md）。error 的成因
+        # 回答的是「为什么没有可信结论」——这次回放本身就没跑成功，与前两类成因都不同，
+        # 因此落闭集兜底的 unknown，并把执行状态如实写进 detail。
+        cause = InconclusiveReason.from_code(
+            InconclusiveCode.UNKNOWN.value,
+            f"回放执行本身没有成功（status={result.status}）",
+        )
     _store(
         case_id,
         run_id,

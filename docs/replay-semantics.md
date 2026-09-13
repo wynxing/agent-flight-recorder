@@ -185,23 +185,30 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 服务端不重复定义分类，而是复用 SDK 的；`server/tests/test_reason_contract.py` 从上面三处
 **读取真实定义**并断言集合逐字相同，因此「每层各自加一个枚举、然后互相不完全一致」会在测试里失败。
 
-| 成因码 | 产生它的位置 | 含义 | 控制台给出的下一步 |
-| --- | --- | --- | --- |
-| `incomplete_recording` | SDK `validate_recording`；pi `load` | 缺少 run_started / run_finished 边界 | 建议重新录制这次运行 |
-| `event_sequence_gap` | SDK `validate_recording`；pi `Tape.finish` | 事件 seq 不连续（丢过事件） | 建议重新录制这次运行 |
-| `redacted_replay_data` | SDK `validate_recording`；pi `save` | 证据已脱敏，不再逐字可比 | 用未命中脱敏规则的录制重跑 |
-| `recording_loss` | SDK `validate_recording`；服务端记录器丢事件 | 录制方/记录器丢过事件 | 建议重新录制这次运行 |
-| `truncated_context` | SDK `validate_recording`；pi 长度截断 | 模型输入的消息没有完整保存 | 提高录制上限后重新录制 |
-| `missing_recorded_response` | SDK 适配层工具分支、`recorded_model_response`；pi `Tape.take` | 父 Run 没有这一步的录制结果 | 改用回归模式让工具真实执行 |
-| `missing_initial_state` | SDK `ensure_replay_context` | 父 Run 记了 input，但状态没恢复也没声明 task_only | 提供状态或显式声明只跑 task |
-| `model_context_changed` | pi 复现路径 | 模型上下文与录制不一致 | 确认模型 / Prompt 是否被改动 |
-| `final_output_changed` | pi 复现路径 | 复现结论与录制不同 | 看运行对比定位第一个分叉点 |
-| `side_effect_blocked` | 用例判定（`server/afr_server/cases.py`） | 副作用被闸门拦截，本次执行没有真实发生 | 确认安全后可显式允许真实执行 |
-| `unknown` | 兼容解析兜底 | 集合之外的取值 | 按保留的原始说明排查，并在上游补齐分类 |
+| 成因码 | Python（SDK / 服务端）真实产生路径 | pi 真实产生路径 | 含义 | 控制台给出的下一步 |
+| --- | --- | --- | --- | --- |
+| `incomplete_recording` | SDK `ReplaySession.validate_recording`（缺 run_started / run_finished 边界） | pi `load` 拒绝不受支持的包结构、`runner` 拒绝不完整的父 Run、`cli` 拒绝被改过的用例包 | 缺少录制边界，或包结构不受支持 | 建议重新录制这次运行 |
+| `event_sequence_gap` | SDK `ReplaySession.validate_recording`（seq 不连续） | pi `Tape.finish`（还有录制步骤没被消费） | 事件 seq 不连续（丢过事件） | 建议重新录制这次运行 |
+| `redacted_replay_data` | SDK `ReplaySession.validate_recording`（父 Run 或事件脱敏过） | pi `save`（落盘前命中脱敏规则） | 证据已脱敏，不再逐字可比 | 用未命中脱敏规则的录制重跑 |
+| `recording_loss` | SDK `validate_recording`（`metadata.afr_recording.complete = false`）；服务端 `replay_runner`（记录器丢事件 / 批次失败） | 解析兼容，暂无产生路径 | 录制方/记录器丢过事件 | 建议重新录制这次运行 |
+| `truncated_context` | SDK `validate_recording`（`message_count` 大于实存 messages） | pi `runner`（模型输出被长度上限截断） | 模型上下文或输出没有被完整保存 | 提高录制上限后重新录制 |
+| `missing_recorded_response` | SDK `recorded_model_response`、LangGraph 适配层 `_replay_tool_result` | pi `Tape.take`（找不到匹配的录制步骤） | 父 Run 没有这一步的录制结果 | 改用回归模式让工具真实执行 |
+| `missing_initial_state` | SDK `ensure_replay_context` | 解析兼容，暂无产生路径 | 父 Run 记了 input，但状态没恢复也没声明 task_only | 提供状态或显式声明只跑 task |
+| `model_context_changed` | 解析兼容，暂无产生路径 | pi `runner` 复现路径（模型上下文与录制不一致） | 模型上下文与录制不一致 | 确认模型 / Prompt 是否被改动 |
+| `final_output_changed` | 解析兼容，暂无产生路径 | pi `runner` 复现路径（复现结论与录制不同） | 复现结论与录制不同 | 看运行对比定位第一个分叉点 |
+| `side_effect_blocked` | 服务端 `cases.py` 用例判定（闸门把写操作降级为 dry_run，或策略直接拒绝） | 解析兼容，暂无产生路径 | 副作用被闸门拦截，本次执行没有真实发生 | 确认安全后可显式允许真实执行 |
+| `unknown` | SDK `from_code` / `legacy` 兼容解析兜底；服务端 `cases.py` 的失败路径 | pi `runner`（非 `Incomplete` 的异常）、`cases.ts`（包不完整且没有成因） | 集合之外的取值 | 按保留的原始说明排查，并在上游补齐分类 |
 
-每个码都有一条**真实产生它的路径**与对应测试（见 `sdk/tests/test_replay_reasons.py`、
+「**解析兼容，暂无产生路径**」是如实标注，不是待办：这些码在**读取**历史数据时必须认出
+（见 8.5 节），但当前没有任何一条代码路径会产出它们。本轮不为表格好看去造产生路径；
+真需要时另开 issue。另外注意 pi 的 `load` 会把包里已有的 `cause` 原样上抛（转发，不是生产），
+所以 pi 侧可能看到一个它自己不产生、而由服务端写下的码。
+
+这张表不是说明文字：`server/tests/test_reason_contract.py` 会**读它**，把「声称某侧能产生」的
+集合拿去真实源码里核对产生点是否存在，并反过来要求标注「解析兼容」的码在那一侧的源码里
+确实找不到产生点。每个真实产生路径也都有对应测试（见 `sdk/tests/test_replay_reasons.py`、
 `server/tests/test_cases.py`、`server/tests/test_replay_reason_api.py`、
-`examples/langgraph_sre_agent/tests/test_inconclusive_reasons.py`）：不是只声明类型。
+`examples/langgraph_sre_agent/tests/test_inconclusive_reasons.py`）。
 
 ### 8.5 历史数据的兼容路径
 

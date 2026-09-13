@@ -44,7 +44,6 @@ const LEGACY: Record<string, InconclusiveCode> = {
   unsupported_context: 'missing_initial_state',
   model_context_changed: 'model_context_changed', final_output_changed: 'final_output_changed',
   side_effect_gate: 'side_effect_blocked', side_effect_blocked: 'side_effect_blocked',
-  side_effect_executed: 'side_effect_blocked',
 };
 
 /** 用已知码构造成因；码不在闭集内时落到 `unknown` 并保留原文。 */

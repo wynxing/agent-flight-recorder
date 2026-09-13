@@ -35,9 +35,13 @@ class ReplayExhaustedError(RuntimeError):
 
     这通常意味着被观测的 Agent 行为已经和当初不同（例如模型换了版本、
     工具返回了不同的结果）。对调试来说这是一条有用的信息，不应该被静默吞掉。
+
+    分类只有一条出口：成因是 ``cause.code``（``InconclusiveCode`` 闭集），
+    不靠异常类型区分。同一个异常类型要表达很多种成因，按类型分会重新长出一套
+    「哪个子类对应哪个成因」的映射，而那正是这套分类要消灭的漂移。
     """
 
-    #: 成因码。基类不给默认值，因此“没有成因”在类型上就写不出来。
+    #: 成因码。默认是闭集兜底 ``unknown``，因此任何一次抛出都必然带一个码。
     code: str = InconclusiveCode.UNKNOWN.value
     #: 给人看的具体信息（哪个工具、哪一步、缺了什么）。散文只放这里。
     detail: str = ""
@@ -58,35 +62,6 @@ class ReplayExhaustedError(RuntimeError):
         """结构化成因。调用方判定用 ``cause.code``，不要解析异常文本。"""
 
         return InconclusiveReason.from_code(self.code, self.detail)
-
-
-class IncompleteReplay(ReplayExhaustedError):
-    """录制质量不足，无法给出可信结论。
-
-    升级为独立类型，是为了能把它与下面这些**成因完全不同**的情况区分开：
-
-    * :class:`ReplayDivergence` —— 录制是完整的，但这次回放走不到原来的轨迹上；
-    * :class:`SideEffectBlocked` —— 执行被策略拦下，这次执行本来就没有真实发生。
-
-    后两者都不是“录制不完整”，因此不能用同一个码，也不能合成同一个 inconclusive。
-    """
-
-    code = InconclusiveCode.INCOMPLETE_RECORDING.value
-
-
-class ReplayDivergence(ReplayExhaustedError):
-    """录制完整，但这次回放偏离了原始轨迹（例如模型上下文变化、结论不同）。"""
-
-    code = InconclusiveCode.MODEL_CONTEXT_CHANGED.value
-
-
-class SideEffectBlocked(ReplayExhaustedError):
-    """副作用被闸门拦截：这次执行本来就没有真实发生。
-
-    这是安全策略正常生效的结果，不是录制缺陷，也不是“结论不通过”。
-    """
-
-    code = InconclusiveCode.SIDE_EFFECT_BLOCKED.value
 
 
 class ReplayOverrides(BaseModel):
