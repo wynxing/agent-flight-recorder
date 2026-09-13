@@ -239,6 +239,9 @@ JSON 列（`input` / `output` / `attributes` / `summary`）存结构化内容；
 **接入一个新的框架**
 
 回放核心（`replay/engine.py`、`replay/effects.py`、`replay/fork.py`）不认识任何框架，只处理事件序列与策略解析。
+录制可信度检查（事件边界、`seq` 缺口、脱敏、录制丢失、上下文截断、初始状态未被恢复）与
+回放上下文的判定（`ensure_replay_context`）都在这层，因此不依赖框架也能被单元测试覆盖；
+适配层只负责据此驱动一次执行。
 新框架需要实现的是一个适配层，职责只有两件：拦截每一步、按计划返回录制结果或真实执行。
 LangGraph 的实现见 `replay/langgraph_adapter.py`，可作为参照。
 

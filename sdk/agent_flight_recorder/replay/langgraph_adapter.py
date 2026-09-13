@@ -49,6 +49,7 @@ from .engine import (
     ReplayResult,
     ReplaySession,
     StepPlan,
+    ensure_replay_context,
     plan_summary,
 )
 
@@ -434,6 +435,9 @@ def run_replay(
 
     state = initial_state if initial_state is not None else default_initial_state(session)
     if initial_state is None:
+        # 这是包内自带的 task-only 快捷路径，只有它自己知道状态没有被真正恢复。
+        # 调用方显式给了 initial_state 时不能覆盖这个标记，否则回放的 `afr_replay_context`
+        # 会声称状态就是原始状态。
         recorder.run.metadata["afr_replay_context"] = "task_only"
     recorder.start(task=session.initial_task, input={"replay": plan_summary(session.plan)})
 
@@ -443,9 +447,11 @@ def run_replay(
 
     try:
         session.validate_recording()
-        if (initial_state is None and session.initial_input
-                and session.parent_run.metadata.get("afr_replay_context") != "task_only"):
-            raise ReplayExhaustedError("unsupported_context: supply initial_state or explicitly record task_only context")
+        ensure_replay_context(
+            initial_state=initial_state,
+            parent_metadata=session.parent_run.metadata,
+            initial_input=session.initial_input,
+        )
         result = agent.invoke(state, config=config)
         if session.incomplete_reason:
             raise ReplayExhaustedError(session.incomplete_reason)

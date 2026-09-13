@@ -247,6 +247,28 @@ class ReplaySession:
         )
 
 
+def ensure_replay_context(
+    *,
+    initial_state: Any,
+    parent_metadata: dict[str, Any] | None,
+    initial_input: dict[str, Any] | None,
+) -> None:
+    """父 Run 记录了初始 input，就必须把状态真的恢复回来。
+
+    `initial_state` 不是可选优化，而是复现可信度的前提。默认只构造 task 消息的
+    快捷路径必须由录制方显式声明 `afr_replay_context = "task_only"`，否则引擎
+    不会假装状态已被恢复（见 docs/replay-semantics.md 第 1 节）。
+    """
+
+    if initial_state is not None or not initial_input:
+        return
+    if (parent_metadata or {}).get("afr_replay_context") == "task_only":
+        return
+    raise ReplayExhaustedError(
+        "unsupported_context: supply initial_state or explicitly record task_only context"
+    )
+
+
 def plan_summary(plan: ReplayPlan) -> str:
     """给 UI 用的一句人话。"""
 

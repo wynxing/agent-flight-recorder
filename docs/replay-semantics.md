@@ -26,6 +26,22 @@
 最后一条意味着：`initial_state` 不是"可选的优化"，而是复现可信度的前提。默认只构造 task 消息的快捷路径
 必须由录制方显式声明，否则引擎不会假装状态已被恢复。早期版本录制的 Run 没有这个标记，需要重新录制。
 
+两条元数据的方向不要写反：`afr_replay_context = "task_only"` 写在**父 Run**（录制方）上，
+是录制方对自己录了什么的自述；引擎读的是父 Run 的这个字段。回放 Run 只有在真的走了
+task-only 快捷路径时才带这个标记——调用方显式传了 `initial_state` 时不会被打上，
+否则一次真正恢复了状态的回放会反过来声称自己只跑了 task 消息。
+
+这五类边界各自有测试守着，缺证据时引擎给出结论而不是继续跑：
+
+| 边界 | 测试 |
+| --- | --- |
+| 录制边界缺失 / `seq` 缺口 | `sdk/tests/test_replay_engine.py::test_recording_without_boundaries_is_rejected`、`::test_event_sequence_gap_is_rejected` |
+| 脱敏数据 | `::test_redacted_recording_is_rejected` |
+| 录制丢失标记 | `::test_recording_loss_marker_is_rejected` |
+| 截断上下文 | `::test_truncated_model_input_is_rejected` |
+| 缺少录制结果 | `::test_recorded_model_response_raises_when_missing`、`::test_unmatched_tool_call_returns_none_instead_of_guessing` |
+| 初始状态未被恢复 | `::test_initial_state_is_required_when_the_parent_recorded_one`、`examples/langgraph_sre_agent/tests/test_scenario.py::test_replay_refuses_to_guess_the_state_when_the_parent_recorded_one` |
+
 ### 回归（Regress）
 
 目标：**验证改动是否让结果变好**，回答"改完到底有没有变好、有没有引入新问题"。
