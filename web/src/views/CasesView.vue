@@ -140,7 +140,8 @@ onUnmounted(stopPolling)
             {{ shortId(item.source_run_id) }}
           </RouterLink>
           <span class="sep">/</span>从第 {{ item.from_seq }} 步回放
-          <span class="sep">/</span>{{ item.preset === 'reproduce' ? '复现模式' : '回归模式' }}
+          <!-- 只有显式声明 regress 才是回归模式：没声明 preset 的用例按复现语义执行。 -->
+          <span class="sep">/</span>{{ item.preset === 'regress' ? '回归模式' : '复现模式' }}
           <span v-if="item.last_run_at" class="sep">/</span>
           <span v-if="item.last_run_at">{{ relativeTime(item.last_run_at) }}执行</span>
         </p>

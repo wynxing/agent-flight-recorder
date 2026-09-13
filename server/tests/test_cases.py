@@ -45,6 +45,32 @@ def test_case_listing_and_reading(client, make_run) -> None:
     assert client.get("/v1/cases/missing").status_code == 404
 
 
+def test_case_timestamps_are_serialized_as_utc(client, make_run) -> None:
+    """用例的时间戳必须带时区。
+
+    不带 Z 的 ISO 串会被前端当成本地时间解析，刚跑完的用例会显示成 8 小时前
+    （东八区），而运行记录那边是带 Z 的——两边不一致本身就是 bug。
+    """
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases", json={"name": "case", "source_run_id": "run-1", "assertions": []}
+    ).json()
+
+    assert created["created_at"].endswith("Z"), created["created_at"]
+
+
+def test_case_defaults_to_reproduce_when_no_preset_is_set(client, make_run) -> None:
+    """没声明 preset 的用例按复现语义执行，因此它不该被标成回归模式。"""
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases", json={"name": "case", "source_run_id": "run-1", "assertions": []}
+    ).json()
+
+    assert created["preset"] is None
+
+
 def test_case_run_returns_immediately_with_a_run_id(client, make_run) -> None:
     client.post("/v1/ingest", json=make_run())
     created = client.post(
@@ -89,4 +115,3 @@ def _await_case(client, case_id: str, timeout: float = 15.0) -> dict:
             return result
         time.sleep(0.1)
     raise AssertionError("用例执行没有在预期时间内结束")
-

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .assertions import AssertionResult, AssertionSpec
 from .diff import RunDiff
+from .storage import aware_utc
 from .tables import CaseTable
 
 
@@ -140,9 +141,11 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         system_prompt=policy.get("system_prompt"),
         last_status=row.last_status,
         last_run_id=row.last_run_id,
-        last_run_at=row.last_run_at,
+        # 时间戳在库里是 naive UTC，必须在这里补回时区：不带 Z 的 ISO 串会被
+        # 前端按本地时间解析，刚跑完的用例会显示成 8 小时前（东八区）。
+        last_run_at=aware_utc(row.last_run_at),
         last_results=[AssertionResult.model_validate(item) for item in (row.last_results or [])],
-        created_at=row.created_at,
+        created_at=aware_utc(row.created_at),
         source_run=source_run,
     )
 
