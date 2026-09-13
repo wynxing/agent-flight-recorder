@@ -15,9 +15,10 @@
 
     只要存在任何未验证项，脚本就不会输出「全部验证通过」。
 
-    「未验证」不只来自脚本自己的判断，也来自被调用工具的自我申报：脚本解析 pytest 的
-    -rs 汇总，把每一处 skip 逐条登记；解析 pi 运行器的 skipped / todo 计数。也就是说
-    「某个测试自己跳过了」同样不可能被写成「全部验证通过」——跑绿不等于都跑过。
+    「未验证」不只来自脚本自己的判断，也来自被调用工具的自我申报：pytest 的跳过同时从
+    junit 报告（结构化的 skipped 计数与明细）与 -rs 汇总（明细，留在日志里供人核对）两个来源
+    确认，任一来源缺失或两者对不上都算未验证；pi 运行器的 skipped / todo 计数同样登记。
+    也就是说「某个测试自己跳过了」不可能被写成「全部验证通过」——跑绿不等于都跑过。
 
     CI 用 -Strict，因此「CI 绿」等价于「Python、控制台与 pi 运行器都真的跑过」。
 
@@ -83,8 +84,8 @@ function Add-Unverified {
 }
 
 function New-TempLog {
-    param([string]$Tag)
-    $path = Join-Path ([System.IO.Path]::GetTempPath()) ("afr-test-" + $Tag + "-" + [guid]::NewGuid().ToString('n') + ".log")
+    param([string]$Tag, [string]$Extension = 'log')
+    $path = Join-Path ([System.IO.Path]::GetTempPath()) ("afr-test-" + $Tag + "-" + [guid]::NewGuid().ToString('n') + "." + $Extension)
     $script:tempLogs.Add($path)
     return $path
 }
@@ -113,39 +114,75 @@ function Test-PythonReady {
 }
 
 function Add-PytestSkips {
-    # 跑绿不等于「都跑过」：pytest 会自己跳过没有依赖的测试。这里把它的自我申报
-    # 登记为未验证项，而不是让「某个测试根本没跑」被写成「全部验证通过」。
-    param([string]$LogPath)
-    if (-not (Test-Path $LogPath)) {
-        Add-Unverified 'pytest 的跳过情况' '无法读取 pytest 输出，无法确认是否有测试被跳过'
-        return
-    }
-    $lines = @(Get-Content -LiteralPath $LogPath)
-    $detailed = 0
-    foreach ($line in $lines) {
-        if ($line -match '^SKIPPED \[(\d+)\]\s+(.+?):(\d+):\s*(.*)$') {
-            $count = [int]$Matches[1]
-            $detailed += $count
-            $reason = if ([string]::IsNullOrWhiteSpace($Matches[4])) { '未给出跳过原因' } else { $Matches[4] }
-            Add-Unverified "pytest 跳过：$($Matches[2]):$($Matches[3])" "$reason；$count 个测试"
-        } elseif ($line -match '^SKIPPED \[(\d+)\]\s+(.*)$') {
-            $count = [int]$Matches[1]
-            $detailed += $count
-            Add-Unverified 'pytest 跳过' "$($Matches[2])；$count 个测试"
+    # 跑绿不等于「都跑过」：pytest 会自己跳过没有依赖的测试。这里读两个独立来源，
+    # 不让结论押在任一来源的格式上：
+    #   1. junit 报告（结构化：testsuite 的 skipped 计数 + 每个 testcase 的 <skipped>）——判定依据；
+    #   2. 控制台 -rs 汇总——明细与交叉验证，同时留在日志里供人核对。
+    # 任一来源缺失、解析失败或两者对不上，都登记为未验证项：这一层的失败方向只能是更保守。
+    param([string]$ConsoleLog, [string]$JunitPath)
+
+    $xmlSkipped = $null
+    $xmlDetailed = 0
+    if (-not (Test-Path $JunitPath)) {
+        Add-Unverified 'pytest 的跳过情况' 'pytest 没有生成 junit 报告，无法确认是否有测试被跳过'
+    } else {
+        try {
+            [xml]$report = Get-Content -LiteralPath $JunitPath -Raw
+            $suites = @($report.testsuites.testsuite)
+            if ($suites.Count -eq 0) { throw '报告里没有 testsuite 节点' }
+            $xmlSkipped = 0
+            foreach ($suite in $suites) { $xmlSkipped += [int]$suite.skipped }
+            foreach ($suite in $suites) {
+                foreach ($case in @($suite.testcase)) {
+                    if ($null -eq $case -or $null -eq $case.skipped) { continue }
+                    $xmlDetailed++
+                    $where = ([string]$case.classname).Trim()
+                    if ($where) { $where = $where + '::' + ([string]$case.name).Trim() } else { $where = ([string]$case.name).Trim() }
+                    $why = ([string]$case.skipped.message).Trim()
+                    if (-not $why) { $why = '未给出跳过原因' }
+                    Add-Unverified "pytest 跳过：$where" $why
+                }
+            }
+            if ($xmlSkipped -ne $xmlDetailed) {
+                Add-Unverified 'pytest 的跳过情况' "junit 报告记了 $xmlSkipped 处跳过，但只解析出 $xmlDetailed 处明细"
+            }
+        } catch {
+            $xmlSkipped = $null
+            Add-Unverified 'pytest 的跳过情况' "pytest 的 junit 报告无法解析：$($_.Exception.Message)"
         }
     }
-    $declared = 0
+
+    if (-not (Test-Path $ConsoleLog)) {
+        Add-Unverified 'pytest 的跳过情况' '无法读取 pytest 控制台输出，无法确认是否有测试被跳过'
+        return
+    }
+    $lines = @(Get-Content -LiteralPath $ConsoleLog)
+    $declared = -1
     foreach ($line in $lines) {
         if ($line -match '(\d+) skipped') { $declared = [int]$Matches[1]; break }
     }
-    if ($declared -gt $detailed) {
-        Add-Unverified 'pytest 的跳过情况' "pytest 汇总报告 $declared 处跳过，但只解析出 $detailed 处明细，未能逐条登记"
+    # pytest 不打印 "0 skipped"，没有计数行就说明跳过数为 0。
+    if ($declared -lt 0) { $declared = 0 }
+    if (-not ($lines | Where-Object { $_ -match '\d+ passed|\d+ failed|\d+ error|no tests ran' })) {
+        Add-Unverified 'pytest 的跳过情况' '未在控制台输出中找到 pytest 汇总行，无法确认是否有测试被跳过'
     }
-    # 有跳过就一定有 SKIPPED 明细；没有明细也没有汇总行，说明输出不完整，
-    # 此时不能默认「没有跳过」。
-    $summarySeen = [bool]($lines | Where-Object { $_ -match '\d+ passed|\d+ failed|\d+ error|no tests ran' })
-    if (-not $summarySeen) {
-        Add-Unverified 'pytest 的跳过情况' '未在输出中找到 pytest 汇总行，无法确认是否有测试被跳过'
+
+    if ($null -eq $xmlSkipped) {
+        # junit 不可用时退回控制台明细，仍然不让「跳过」无声通过。
+        foreach ($line in $lines) {
+            if ($line -match '^SKIPPED \[(\d+)\]\s+(.+?):(\d+):\s*(.*)$') {
+                $why = $Matches[4]
+                if ([string]::IsNullOrWhiteSpace($why)) { $why = '未给出跳过原因' }
+                Add-Unverified "pytest 跳过：$($Matches[2]):$($Matches[3])" $why
+            } elseif ($line -match '^SKIPPED \[(\d+)\]\s+(.*)$') {
+                Add-Unverified 'pytest 跳过' $Matches[2]
+            }
+        }
+        return
+    }
+
+    if ($declared -ne $xmlSkipped) {
+        Add-Unverified 'pytest 的跳过情况' "控制台汇总记 $declared 处跳过，junit 报告记 $xmlSkipped 处，两者不一致"
     }
 }
 
@@ -298,10 +335,12 @@ if ($PythonOnly) {
 if ($pythonState -eq 'ready') {
     Write-Section 'Python 测试'
     $pytestLog = New-TempLog 'pytest'
-    # -rs 让 pytest 把每一处 skip 与原因打进汇总，脚本据此登记未验证项。
-    & uv run pytest -rs | Tee-Object -FilePath $pytestLog
+    $pytestJunit = New-TempLog 'pytest-junit' 'xml'
+    # -rs 把每一处 skip 与原因打进控制台日志供人核对；--junitxml 再给一份结构化的
+    # 跳过计数与明细。两个来源由 Add-PytestSkips 交叉验证，任一缺失或对不上都登记为未验证项。
+    & uv run pytest -rs "--junitxml=$pytestJunit" | Tee-Object -FilePath $pytestLog
     if ($LASTEXITCODE -ne 0) { Add-Failure 'Python 测试：pytest 未通过' }
-    Add-PytestSkips -LogPath $pytestLog
+    Add-PytestSkips -ConsoleLog $pytestLog -JunitPath $pytestJunit
 }
 
 # ---------------------------------------------------------------- 控制台构建
