@@ -23,7 +23,7 @@ from agent_flight_recorder.models import (
 from agent_flight_recorder.redact import redact
 from sqlmodel import Session, col, select
 
-from .tables import CaseTable, EventTable, RunTable
+from .tables import CaseTable, EventTable, RunTable, SuiteItemTable, SuiteTable
 
 
 def naive_utc(value: datetime | None) -> datetime | None:
@@ -296,6 +296,30 @@ def list_cases(session: Session, *, limit: int = 100) -> list[CaseTable]:
 
 def get_case(session: Session, case_id: str) -> CaseTable | None:
     return session.get(CaseTable, case_id)
+
+
+def get_suite(session: Session, suite_id: str) -> SuiteTable | None:
+    return session.get(SuiteTable, suite_id)
+
+
+def list_suites(session: Session, *, limit: int = 20) -> list[SuiteTable]:
+    statement = select(SuiteTable).order_by(col(SuiteTable.created_at).desc()).limit(limit)
+    return list(session.exec(statement).all())
+
+
+def list_suite_items(session: Session, suite_id: str) -> list[SuiteItemTable]:
+    """按提交时的落位返回格子。
+
+    顺序稳定是有意的：界面按条件分组呈现，格子在自己那一列里的先后必须与用户挑
+    用例的顺序一致，否则同一个批量的两次刷新看起来会像两批不同的结果。
+    """
+
+    statement = (
+        select(SuiteItemTable)
+        .where(SuiteItemTable.suite_id == suite_id)
+        .order_by(col(SuiteItemTable.position).asc())
+    )
+    return list(session.exec(statement).all())
 
 
 def update_run_metadata(session: Session, run_id: str, patch: dict[str, Any]) -> None:

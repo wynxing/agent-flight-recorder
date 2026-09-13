@@ -222,8 +222,103 @@ export interface CaseItem {
    * 也就是说 inconclusive 与 error 都会带上它：error 的 code 说明为什么没有可信结论。
    */
   last_cause?: InconclusiveCause | null
+  /** 最近一次执行用的条件；单条运行不携带条件时为 null。 */
+  last_condition?: SuiteConditionInfo | null
   created_at?: string | null
   source_run?: RunRecord | null
+}
+
+/** 矩阵的一列：Prompt 版本与模型。null / 空表示沿用用例自身的设定。 */
+export interface SuiteCondition {
+  prompt?: string | null
+  model?: string | null
+}
+
+/** 一个格子上实际用到的条件；system_prompt 是当时的 Prompt 正文，便于事后核对。 */
+export interface SuiteConditionInfo {
+  prompt?: string | null
+  model?: string | null
+  system_prompt?: string | null
+  preset?: string | null
+}
+
+export type SuiteItemStatus = 'pending' | 'running' | 'passed' | 'failed' | 'inconclusive' | 'error'
+
+/** 套件里的一格：某条用例在某个条件下的结论。条件跟着结果一起回来，结论因此没有歧义。 */
+export interface SuiteItem {
+  id: string
+  case_id: string
+  case_name: string
+  condition_key: string
+  condition: SuiteConditionInfo
+  status: SuiteItemStatus
+  run_id?: string | null
+  results: AssertionResult[]
+  cause?: InconclusiveCause | null
+  started_at?: string | null
+  ended_at?: string | null
+}
+
+/**
+ * 一个条件的汇总。
+ *
+ * 三个桶互斥且穷尽：total === determinable + undecided + unfinished。
+ * undecided 只包括**跑过了、但拿不到可信结论**的格子（inconclusive + error）；
+ * unfinished 是**还没跑完**的格子（pending + running），它没有任何结论，因此不属于
+ * undecided。可判断率的分母永远是该条件自己的 total —— 服务端刻意不给出任何跨条件的
+ * 合计分数（见 PRD 6.5），界面也不许自己算一个。
+ */
+export interface SuiteConditionGroup {
+  condition_key: string
+  condition: SuiteConditionInfo
+  label: string
+  total: number
+  completed: number
+  counts: Record<string, number>
+  determinable: number
+  undecided: number
+  /** 还没跑完的格子数（pending + running）。它不是结论，必须能与 undecided 区分开。 */
+  unfinished: number
+  determinable_rate?: number | null
+  errors: number
+  items: SuiteItem[]
+}
+
+export interface SuiteDetail {
+  id: string
+  status: 'running' | 'finished'
+  created_at?: string | null
+  finished_at?: string | null
+  case_ids: string[]
+  conditions: SuiteCondition[]
+  total: number
+  completed: number
+  counts: Record<string, number>
+  errors: number
+  groups: SuiteConditionGroup[]
+}
+
+export interface SuiteSummary {
+  id: string
+  status: 'running' | 'finished'
+  created_at?: string | null
+  finished_at?: string | null
+  conditions: SuiteCondition[]
+  total: number
+  completed: number
+  counts: Record<string, number>
+  errors: number
+}
+
+export interface SuiteListResponse {
+  suites: SuiteSummary[]
+}
+
+export interface SuiteSubmitResponse {
+  suite_id: string
+  status: string
+  total: number
+  conditions: SuiteCondition[]
 }
 
 export interface AgentInfo {

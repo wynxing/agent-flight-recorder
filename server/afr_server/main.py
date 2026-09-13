@@ -47,11 +47,17 @@ from .schemas import (
     RunDetailResponse,
     RunListResponse,
     RunListItem,
+    SuiteDetailResponse,
+    SuiteListResponse,
+    SuiteSubmitRequest,
+    SuiteSubmitResponse,
+    SuiteSummary,
     TimelineResponse,
     case_to_item,
     replay_meta_to_dict,
 )
 from .seed import seed_if_empty
+from .suites import SuiteRequestError, submit_suite, suite_payload, suite_summaries
 from .storage import (
     get_case,
     get_events,
@@ -426,6 +432,51 @@ def run_case(case_id: str, payload: CaseRunRequest) -> CaseRunResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return CaseRunResponse(case_id=case_id, run_id=run_id)
+
+
+# ------------------------------------------------------------------ 批量套件
+
+
+@app.post("/v1/suites", response_model=SuiteSubmitResponse)
+def submit_suite_endpoint(payload: SuiteSubmitRequest) -> SuiteSubmitResponse:
+    """发起一次批量运行：一组用例 × 一组条件。
+
+    立即返回批次标识，执行全部在后台，请求不阻塞；页面的进度来自对批次查询的轮询。
+    """
+
+    try:
+        suite_id = submit_suite(
+            case_ids=payload.case_ids,
+            all_cases=payload.all_cases,
+            conditions=[condition.model_dump() for condition in payload.conditions],
+        )
+    except SuiteRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    with session_scope() as session:
+        body = suite_payload(session, suite_id) or {}
+    return SuiteSubmitResponse(
+        suite_id=suite_id,
+        status=str(body.get("status", "running")),
+        total=int(body.get("total", 0)),
+        conditions=payload.conditions,
+    )
+
+
+@app.get("/v1/suites", response_model=SuiteListResponse)
+def read_suites(limit: int = Query(20, ge=1, le=100)) -> SuiteListResponse:
+    with session_scope() as session:
+        summaries = suite_summaries(session, limit=limit)
+    return SuiteListResponse(suites=[SuiteSummary(**item) for item in summaries])
+
+
+@app.get("/v1/suites/{suite_id}", response_model=SuiteDetailResponse)
+def read_suite(suite_id: str) -> SuiteDetailResponse:
+    with session_scope() as session:
+        body = suite_payload(session, suite_id)
+    if body is None:
+        raise HTTPException(status_code=404, detail=f"suite not found: {suite_id}")
+    return SuiteDetailResponse(**body)
 
 
 # ------------------------------------------------------------------ 静态控制台

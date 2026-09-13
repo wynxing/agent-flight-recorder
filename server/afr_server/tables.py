@@ -89,5 +89,61 @@ class CaseTable(SQLModel, table=True):
     # 结论的成因（结构化的 {code, detail}）。只有 last_status 没有成因的用例，
     # 用户无从知道该去看录制质量还是副作用策略。
     last_cause: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
+    #: 最近一次执行用的条件（prompt 版本 / 模型）。缺了它，用例页上那句「最近一次结论」
+    #: 就没有前提：同一批里两个 Prompt 版本都能写进这一列，谁也说不清看到的是哪一次。
+    last_condition: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
+
+
+class SuiteTable(SQLModel, table=True):
+    """一次批量运行：一组用例 × 一组条件。
+
+    这张表只记本次批量的请求（用例集合与条件集合）与生命周期，每个格子的结论落在
+    SuiteItemTable 上。条件刻意存在两处而不是只存一份：套件层保留用户请求的顺序
+    （界面按它分组呈现），格子层保留这次执行实际用的条件（结论永远带着前提）。
+    """
+
+    __tablename__ = "suites"
+
+    id: str = Field(primary_key=True)
+    #: running / finished。落库值只是当前值；查询时以格子的实际状态重新推导，
+    #: 因此进程在批量中途重启，也不会留下一个永远「进行中」的批次。
+    status: str = Field(default="running", index=True)
+    case_ids: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    conditions: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
+    finished_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+
+
+class SuiteItemTable(SQLModel, table=True):
+    """套件里的一格：某条用例在某个条件下的执行结果。
+
+    condition 与结论一起落库。缺了它，「这条用例的结论」就没有前提：同一批里两个
+    Prompt 版本的格子会长得一模一样，界面也无从分辨哪条属于哪个条件。
+    """
+
+    __tablename__ = "suite_items"
+    __table_args__ = (
+        # 一个套件里「同一用例 × 同一条件」只能有一个格子。
+        UniqueConstraint("suite_id", "case_id", "condition_key", name="uq_suite_items_cell"),
+        Index("ix_suite_items_suite_case", "suite_id", "case_id"),
+    )
+
+    id: str = Field(primary_key=True)
+    suite_id: str = Field(index=True)
+    case_id: str = Field(index=True)
+    case_name: str = ""
+    #: 在本次批量里的落位，保住「用户选的顺序」，界面不必自己重排。
+    position: int = Field(default=0)
+    #: 条件的规范化键（由 prompt / model 名字构成），聚合按它分组。
+    condition_key: str = Field(index=True)
+    #: 这次执行实际用的条件：prompt 版本名、模型，以及解析出来的 Prompt 正文。
+    condition: Any = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    #: pending / running / passed / failed / inconclusive / error。
+    status: str = Field(default="pending", index=True)
+    run_id: Optional[str] = None
+    results: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    cause: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
+    started_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+    ended_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
 

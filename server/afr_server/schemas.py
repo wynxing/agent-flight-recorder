@@ -95,6 +95,8 @@ class CaseItem(BaseModel):
     #: 最近一次结论的成因（结构化的 ``{code, detail}``）；结论为 passed / failed 时为 None，
     #: 也就是 inconclusive 与 error 都必须带上它（见 docs/protocol.md）。
     last_cause: InconclusiveReason | None = None
+    #: 最近一次执行用的条件（Prompt 版本 / 模型）；单条运行不携带条件时为 None。
+    last_condition: dict[str, Any] | None = None
     created_at: datetime | None = None
     source_run: RunRecord | None = None
 
@@ -114,6 +116,100 @@ class CaseRunResponse(BaseModel):
     case_id: str
     run_id: str
     status: str = "running"
+
+
+class SuiteCondition(BaseModel):
+    """矩阵的一列：Prompt 版本与模型。None 表示沿用用例自身的设定。"""
+
+    prompt: str | None = None
+    model: str | None = None
+
+
+class SuiteSubmitRequest(BaseModel):
+    case_ids: list[str] = Field(default_factory=list)
+    #: 一键全选。与 case_ids 互斥，二者都不给则请求不成立。
+    all_cases: bool = False
+    #: 条件列表；不给就是「沿用用例自身条件」这一列。
+    conditions: list[SuiteCondition] = Field(default_factory=lambda: [SuiteCondition()])
+
+
+class SuiteSubmitResponse(BaseModel):
+    suite_id: str
+    status: str = "running"
+    total: int
+    conditions: list[SuiteCondition] = Field(default_factory=list)
+
+
+class SuiteItem(BaseModel):
+    """套件里的一格：某条用例在某个条件下的结论。"""
+
+    id: str
+    case_id: str
+    case_name: str
+    condition_key: str
+    condition: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    run_id: str | None = None
+    results: list[AssertionResult] = Field(default_factory=list)
+    cause: InconclusiveReason | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+
+
+class SuiteConditionGroup(BaseModel):
+    """一个条件的汇总。
+
+    只有四态计数与该条件自己的可判断率：这里没有任何跨条件的合计分数，分母就是
+    该条件自己的 total。
+
+    三个桶互斥且穷尽：total == determinable + undecided + unfinished。
+    undecided 只包括**跑过了、但拿不到可信结论**的格子（inconclusive + error）；
+    unfinished 是**还没跑完**的格子（pending + running），它没有任何结论，因此不能
+    被算进 undecided——把「还没跑」写成「拿不到结论」是对从未执行过的格子下断言。
+    """
+
+    condition_key: str
+    condition: dict[str, Any] = Field(default_factory=dict)
+    label: str
+    total: int
+    completed: int
+    counts: dict[str, int] = Field(default_factory=dict)
+    determinable: int
+    undecided: int
+    unfinished: int = 0
+    determinable_rate: float | None = None
+    errors: int
+    items: list[SuiteItem] = Field(default_factory=list)
+
+
+class SuiteDetailResponse(BaseModel):
+    id: str
+    status: str
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    case_ids: list[str] = Field(default_factory=list)
+    conditions: list[dict[str, Any]] = Field(default_factory=list)
+    total: int
+    completed: int
+    counts: dict[str, int] = Field(default_factory=dict)
+    errors: int
+    groups: list[SuiteConditionGroup] = Field(default_factory=list)
+
+
+class SuiteSummary(BaseModel):
+    id: str
+    status: str
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    conditions: list[dict[str, Any]] = Field(default_factory=list)
+    total: int
+    completed: int
+    counts: dict[str, int] = Field(default_factory=dict)
+    errors: int
+
+
+class SuiteListResponse(BaseModel):
+    suites: list[SuiteSummary] = Field(default_factory=list)
 
 
 class AgentInfo(BaseModel):
@@ -152,6 +248,9 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         # 历史行没有这个字段（或写着旧的自由文本）时走兼容解析，绝不因此报错。
         last_cause=(
             InconclusiveReason.from_dict(row.last_cause) if getattr(row, "last_cause", None) else None
+        ),
+        last_condition=(
+            dict(row.last_condition) if getattr(row, "last_condition", None) else None
         ),
         created_at=aware_utc(row.created_at),
         source_run=source_run,
@@ -200,6 +299,14 @@ __all__ = [
     "RunDiff",
     "RunListItem",
     "RunListResponse",
+    "SuiteCondition",
+    "SuiteConditionGroup",
+    "SuiteDetailResponse",
+    "SuiteItem",
+    "SuiteListResponse",
+    "SuiteSubmitRequest",
+    "SuiteSubmitResponse",
+    "SuiteSummary",
     "TimelineResponse",
     "case_to_item",
     "replay_meta_to_dict",

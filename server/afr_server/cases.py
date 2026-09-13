@@ -8,7 +8,7 @@ Case 的价值全部落在"能不能被稳定重跑并给出明确结论"上，�
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -34,6 +34,10 @@ from .storage import final_output_of, get_case, get_events, get_run
 from .tables import CaseTable
 
 logger = logging.getLogger(__name__)
+
+#: 一次用例执行结束时的观察点：结论、断言结果与成因。
+#: 批量套件靠它把每条结论落到自己的格子上；单条执行路径不传它，行为不变。
+ResultHook = Callable[[str, list[dict[str, Any]], "InconclusiveReason | None"], None]
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="afr-case")
 
@@ -123,11 +127,17 @@ def run_case_blocking(
     policy: EffectPolicy | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    on_started: Callable[[str], None] | None = None,
+    on_result: ResultHook | None = None,
+    condition: dict[str, Any] | None = None,
 ) -> str:
     """原地执行一次用例，返回回放 Run 的 ID。
 
     播种与测试需要"函数返回时结论已经落库"，HTTP 路径则继续走线程池。
     两条路径共用同一个 _job，因此语义不会因为入口不同而漂移。
+
+    on_started / on_result 是给批量套件的观察点：格子要在执行前就拿到回放 Run 的
+    ID，执行后拿到结论与成因。单条执行路径不传它们，行为与以前逐字一致。
     """
 
     run_id, plan, snapshot = _prepare_case_run(
@@ -138,7 +148,9 @@ def run_case_blocking(
         model=model,
         system_prompt=system_prompt,
     )
-    _job(plan, run_id, case_id, snapshot)
+    if on_started is not None:
+        on_started(run_id)
+    _job(plan, run_id, case_id, snapshot, on_result=on_result, condition=condition)
     return run_id
 
 
@@ -163,6 +175,9 @@ def _prepare_case_run(
         row.last_run_id = run_id
         row.last_run_at = utcnow()
         row.last_results = []
+        # 新一次执行开始时就清掉上一次的条件，与清空断言结果同一个道理：执行中途
+        # 停在「正在执行」上的那一刻，不该还挂着上一轮的前提。
+        row.last_condition = None
         session.add(row)
 
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
@@ -190,27 +205,41 @@ def _job(
     run_id: str,
     case_id: str,
     snapshot: dict[str, Any],
+    *,
+    on_result: ResultHook | None = None,
+    condition: dict[str, Any] | None = None,
 ) -> None:
     try:
-        _execute(plan, run_id, case_id, snapshot)
+        if on_result is None and condition is None:
+            # 单条执行路径原样调用：有些调用方（含测试替身）只按位置接收参数，
+            # 不该因为多了一个批量专用观察点而被迫改签名。
+            _execute(plan, run_id, case_id, snapshot)
+        else:
+            _execute(plan, run_id, case_id, snapshot, on_result=on_result, condition=condition)
     except Exception as exc:  # noqa: BLE001 - 后台任务失败也要给出结论
         logger.warning("case run failed: %s", exc)
-        _store(
-            case_id,
-            run_id,
-            "error",
-            [
-                {
-                    "spec": {"type": "case_execution", "value": None, "note": ""},
-                    "passed": False,
-                    "detail": f"{type(exc).__name__}: {exc}",
-                }
-            ],
-            InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value, f"{type(exc).__name__}: {exc}"),
-        )
+        results = [
+            {
+                "spec": {"type": "case_execution", "value": None, "note": ""},
+                "passed": False,
+                "detail": f"{type(exc).__name__}: {exc}",
+            }
+        ]
+        cause = InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value, f"{type(exc).__name__}: {exc}")
+        _store(case_id, run_id, "error", results, cause, condition)
+        if on_result is not None:
+            on_result("error", results, cause)
 
 
-def _execute(plan, run_id: str, case_id: str, snapshot: dict[str, Any]) -> None:
+def _execute(
+    plan,
+    run_id: str,
+    case_id: str,
+    snapshot: dict[str, Any],
+    *,
+    on_result: ResultHook | None = None,
+    condition: dict[str, Any] | None = None,
+) -> None:
     result = execute_replay(plan, run_id)
 
     with session_scope() as session:
@@ -260,13 +289,10 @@ def _execute(plan, run_id: str, case_id: str, snapshot: dict[str, Any]) -> None:
             InconclusiveCode.UNKNOWN.value,
             f"回放执行本身没有成功（status={result.status}）",
         )
-    _store(
-        case_id,
-        run_id,
-        verdict,
-        [item.model_dump(mode="json") for item in results],
-        cause,
-    )
+    payload = [item.model_dump(mode="json") for item in results]
+    _store(case_id, run_id, verdict, payload, cause, condition)
+    if on_result is not None:
+        on_result(verdict, payload, cause)
 
 
 def snapshot_of(case: CaseTable) -> dict[str, Any]:
@@ -305,6 +331,7 @@ def _store(
     status: str,
     results: list[dict[str, Any]],
     cause: InconclusiveReason | None = None,
+    condition: dict[str, Any] | None = None,
 ) -> None:
     try:
         with session_scope() as session:
@@ -317,6 +344,12 @@ def _store(
             row.last_results = results
             # 结论与成因一起落库：不能只有结论、没有成因。
             row.last_cause = cause.model_dump(mode="json") if cause else None
+            # 条件也一起落库：同一条用例在不同 Prompt 版本下有不同结论，用例页只显示结论
+            # 而不显示前提，就会出现「这条用例上次是什么条件下的结论」这种歧义。
+            # 单条运行不带条件时落 None，而不是替它写一句「沿用用例自身条件」：单条入口
+            # 允许直接传 Prompt 正文做覆盖（不带版本名），凭空补一个条件名会把一次真实
+            # 覆盖描述成「什么都没变」，那比留空更容易误导。
+            row.last_condition = dict(condition) if condition else None
             session.add(row)
     except Exception as exc:  # noqa: BLE001
         logger.warning("failed to persist case result: %s", exc)

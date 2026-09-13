@@ -10,6 +10,10 @@ import type {
   RunDetailResponse,
   RunDiff,
   RunListResponse,
+  SuiteCondition,
+  SuiteDetail,
+  SuiteListResponse,
+  SuiteSubmitResponse,
   TimelineResponse,
 } from './types'
 
@@ -109,6 +113,20 @@ export const api = {
     payload: { from_seq?: number; preset?: ReplayPreset; model?: string; system_prompt?: string },
   ) =>
     request<CaseRunResponse>(`/v1/cases/${caseId}/run`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  suites: (limit = 20) => request<SuiteListResponse>(`/v1/suites?limit=${limit}`),
+
+  suite: (suiteId: string) => request<SuiteDetail>(`/v1/suites/${suiteId}`),
+
+  /**
+   * 发起一次批量运行：一组用例 × 一组条件。
+   * 立刻返回批次标识，执行在后台；进度来自对批次查询的轮询。
+   */
+  runSuite: (payload: { case_ids?: string[]; all_cases?: boolean; conditions?: SuiteCondition[] }) =>
+    request<SuiteSubmitResponse>('/v1/suites', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
