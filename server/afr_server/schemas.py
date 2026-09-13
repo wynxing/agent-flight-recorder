@@ -92,7 +92,8 @@ class CaseItem(BaseModel):
     last_run_id: str | None = None
     last_run_at: datetime | None = None
     last_results: list[AssertionResult] = Field(default_factory=list)
-    #: 最近一次结论的成因（结构化的 ``{code, detail}``）；结论不是 inconclusive 时为 None。
+    #: 最近一次结论的成因（结构化的 ``{code, detail}``）；结论为 passed / failed 时为 None，
+    #: 也就是 inconclusive 与 error 都必须带上它（见 docs/protocol.md）。
     last_cause: InconclusiveReason | None = None
     created_at: datetime | None = None
     source_run: RunRecord | None = None

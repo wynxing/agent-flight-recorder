@@ -84,6 +84,167 @@ def test_most_significant_picks_the_most_fundamental_cause() -> None:
     assert most_significant([]) is None
 
 
+# ---------------------------------------------------------------- 真实能力表
+
+#: 文档里用来标注「这一侧只做兼容解析、没有产生路径」的固定短语。
+NO_PRODUCTION_PATH = "解析兼容，暂无产生路径"
+
+
+def _capability_table() -> dict[str, dict[str, str]]:
+    """从 docs/replay-semantics.md 第 8 节的表里读出「哪一侧声称能产生哪个码」。
+
+    读的是文档本身，而不是在这里抄一份：抄一份只能证明抄对了。
+    """
+
+    lines = (ROOT / "docs/replay-semantics.md").read_text(encoding="utf-8").splitlines()
+    header = next((i for i, line in enumerate(lines) if line.startswith("| 成因码 |")), None)
+    assert header is not None, "docs 第 8 节里没有真实产生路径能力表"
+
+    columns = [cell.strip() for cell in lines[header].strip("|").split("|")]
+    assert columns[1] == "Python（SDK / 服务端）真实产生路径", columns
+    assert columns[2] == "pi 真实产生路径", columns
+
+    table: dict[str, dict[str, str]] = {}
+    for line in lines[header + 1 :]:
+        if not line.startswith("|"):
+            break
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if set(cells[0]) <= {"-", " "}:
+            continue  # 表头下的分隔行
+        table[cells[0].strip("`")] = {"python": cells[1], "pi": cells[2]}
+    return table
+
+
+#: Python 侧（SDK + 服务端）每个码的真实产生点：文件 + 必须出现的代码片段。
+#: 文档说「Python 能产生」的码，必须在这里找到落到源码里的对应物。
+PYTHON_PRODUCTION_SITES: dict[str, tuple[str, str]] = {
+    "incomplete_recording": (
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "InconclusiveCode.INCOMPLETE_RECORDING.value",
+    ),
+    "event_sequence_gap": (
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "InconclusiveCode.EVENT_SEQUENCE_GAP.value",
+    ),
+    "redacted_replay_data": (
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "InconclusiveCode.REDACTED_REPLAY_DATA.value",
+    ),
+    "recording_loss": (
+        "server/afr_server/replay_runner.py",
+        "InconclusiveCode.RECORDING_LOSS.value",
+    ),
+    "truncated_context": (
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "InconclusiveCode.TRUNCATED_CONTEXT.value",
+    ),
+    "missing_recorded_response": (
+        "sdk/agent_flight_recorder/replay/langgraph_adapter.py",
+        "InconclusiveCode.MISSING_RECORDED_RESPONSE.value",
+    ),
+    "missing_initial_state": (
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "InconclusiveCode.MISSING_INITIAL_STATE.value",
+    ),
+    "side_effect_blocked": (
+        "server/afr_server/cases.py",
+        "InconclusiveCode.SIDE_EFFECT_BLOCKED.value",
+    ),
+    "unknown": (
+        "server/afr_server/cases.py",
+        "InconclusiveCode.UNKNOWN.value",
+    ),
+}
+
+#: pi 侧每个码的真实产生点：文件里必须出现该码的字符串字面量。
+PI_PRODUCTION_SITES: dict[str, str] = {
+    "incomplete_recording": "integrations/pi/src/core.ts",
+    "event_sequence_gap": "integrations/pi/src/core.ts",
+    "redacted_replay_data": "integrations/pi/src/core.ts",
+    "truncated_context": "integrations/pi/src/runner.ts",
+    "missing_recorded_response": "integrations/pi/src/core.ts",
+    "model_context_changed": "integrations/pi/src/runner.ts",
+    "final_output_changed": "integrations/pi/src/runner.ts",
+    "unknown": "integrations/pi/src/runner.ts",
+}
+
+
+def test_documented_production_sites_really_exist() -> None:
+    """文档声称某侧能产生某个码，就必须能在那一侧的源码里找到那个产生点。"""
+
+    table = _capability_table()
+    assert set(table) == set(CAUSE_CODES), "能力表必须覆盖闭集里的每一个码"
+
+    for code, cells in table.items():
+        if NO_PRODUCTION_PATH not in cells["python"]:
+            assert code in PYTHON_PRODUCTION_SITES, (
+                f"文档说 Python 侧能产生 {code}，但测试里没有登记它的产生点"
+            )
+            path, snippet = PYTHON_PRODUCTION_SITES[code]
+            assert snippet in (ROOT / path).read_text(encoding="utf-8"), (
+                f"{code} 的产生点不在文档所写的 {path}"
+            )
+        else:
+            assert code not in PYTHON_PRODUCTION_SITES, (
+                f"{code} 标了「暂无产生路径」，却仍然登记着 Python 侧产生点"
+            )
+
+        if NO_PRODUCTION_PATH not in cells["pi"]:
+            assert code in PI_PRODUCTION_SITES, (
+                f"文档说 pi 侧能产生 {code}，但测试里没有登记它的产生点"
+            )
+            source = (ROOT / PI_PRODUCTION_SITES[code]).read_text(encoding="utf-8")
+            assert (chr(39) + code + chr(39)) in source or (chr(34) + code + chr(34)) in source, (
+                f"{code} 的产生点不在文档所写的 {PI_PRODUCTION_SITES[code]}"
+            )
+        else:
+            assert code not in PI_PRODUCTION_SITES, (
+                f"{code} 标了「暂无产生路径」，却仍然登记着 pi 侧产生点"
+            )
+
+
+def _production_hits(code: str, *, pi: bool) -> list[str]:
+    """在某一侧的生产源码里找这个码的痕迹（字符串字面量或枚举成员）。
+
+    刻意排除定义码的地方（Python 的 reasons.py / pi 的 reasons.ts）：闭集的定义
+    本身不是产生路径，把它算进来会让「只做兼容解析」的码看起来像有产生点。
+    """
+
+    needles = [chr(39) + code + chr(39), chr(34) + code + chr(34)]
+    if not pi:
+        needles.append(code.upper())  # InconclusiveCode 的成员名，如 MODEL_CONTEXT_CHANGED
+    roots = (
+        [ROOT / "integrations/pi/src"]
+        if pi
+        else [ROOT / "sdk/agent_flight_recorder", ROOT / "server/afr_server"]
+    )
+    definitions = {"reasons.ts"} if pi else {"reasons.py"}
+    hits: list[str] = []
+    for root in roots:
+        for path in sorted(root.rglob("*.ts" if pi else "*.py")):
+            if path.name in definitions:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if any(needle in text for needle in needles):
+                hits.append(path.relative_to(ROOT).as_posix())
+    return hits
+
+
+def test_codes_marked_as_parse_only_really_have_no_production_path() -> None:
+    """「解析兼容，暂无产生路径」是断言而不是备注：源码里必须真的找不到产生点。"""
+
+    table = _capability_table()
+    for code, cells in table.items():
+        if NO_PRODUCTION_PATH in cells["python"]:
+            assert _production_hits(code, pi=False) == [], (
+                f"{code} 被标成 Python 侧只做兼容解析，但源码里仍有产生它的痕迹"
+            )
+        if NO_PRODUCTION_PATH in cells["pi"]:
+            assert _production_hits(code, pi=True) == [], (
+                f"{code} 被标成 pi 侧只做兼容解析，但源码里仍有产生它的痕迹"
+            )
+
+
 # ---------------------------------------------------------------- 跨语言
 
 def _ts_enum_values() -> list[str]:
@@ -133,6 +294,9 @@ def test_typescript_legacy_parser_agrees_with_python() -> None:
         "no_recording: step 2",
         "model_output_truncated",
         "unsupported_context: truncated messages",
+        # 语义反转的那条：两侧都必须落 unknown，不能判成 blocked。
+        "side_effect_executed",
+        "side_effect_executed: step 4",
         "[afr] 父 Run 中没有与本次调用匹配的 read 录制结果。",
         "",
     ]

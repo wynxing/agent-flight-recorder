@@ -20,12 +20,9 @@ from agent_flight_recorder.models import (
     utcnow,
 )
 from agent_flight_recorder.replay.engine import (
-    IncompleteReplay,
-    ReplayDivergence,
     ReplayExhaustedError,
     ReplayPlan,
     ReplaySession,
-    SideEffectBlocked,
 )
 from agent_flight_recorder.replay.reasons import InconclusiveCode, InconclusiveReason
 
@@ -60,6 +57,14 @@ def code_of(events: list[Event], run: RunRecord | None = None) -> str:
     with pytest.raises(ReplayExhaustedError) as caught:
         session(events, run).validate_recording()
     return caught.value.cause.code
+
+
+def _failure(events: list[Event], run: RunRecord | None = None) -> ReplayExhaustedError:
+    """驱动引擎预检并原样返回异常：类型与成因都要能被断言，而不是只看码。"""
+
+    with pytest.raises(ReplayExhaustedError) as caught:
+        session(events, run).validate_recording()
+    return caught.value
 
 
 def test_engine_produces_each_declared_recording_code() -> None:
@@ -115,16 +120,57 @@ def test_adapter_produces_missing_recorded_response_for_an_unmatched_tool() -> N
     assert caught.value.cause.detail and "read" in caught.value.cause.detail
 
 
-def test_cause_types_are_distinguishable_by_type_not_by_parsing_text() -> None:
-    """录制不完整、复现偏离、副作用被拦是三种类型，判定不靠解析异常文本。"""
+def test_side_effect_executed_is_never_relabelled_as_blocked() -> None:
+    """``side_effect_executed`` 说反话的代价由调用方承担，因此不能落成 blocked。
 
-    assert issubclass(IncompleteReplay, ReplayExhaustedError)
-    assert issubclass(ReplayDivergence, ReplayExhaustedError)
-    assert issubclass(SideEffectBlocked, ReplayExhaustedError)
+    它以前是别名表里指向 ``side_effect_blocked`` 的一条——语义恰好相反。当前没有
+    产生路径会把它喂进成因解析，但这是公开函数：一旦第三方适配器把步骤级 reason
+    传进来，就会得到与事实相反的成因。现在这条别名被删掉，取值诚实地落到
+    ``unknown`` 并把原文留在 ``detail``。
+    """
 
-    assert IncompleteReplay("边界缺失").cause.code == InconclusiveCode.INCOMPLETE_RECORDING.value
-    assert ReplayDivergence("上下文变了").cause.code == InconclusiveCode.MODEL_CONTEXT_CHANGED.value
-    assert SideEffectBlocked("被拦").cause.code == InconclusiveCode.SIDE_EFFECT_BLOCKED.value
+    parsed = InconclusiveReason.legacy("side_effect_executed")
+    # 先钉住「不是 blocked」：删别名时最容易犯的错是换成另一个听起来接近的码。
+    assert parsed.code != InconclusiveCode.SIDE_EFFECT_BLOCKED.value
+    assert parsed.code == InconclusiveCode.UNKNOWN.value
+    # 认不出来也不能把原文弄丢。
+    assert parsed.detail == "side_effect_executed"
+    # 出现在整句里同样不猜。
+    assert InconclusiveReason.legacy("side_effect_executed: step 4").code == "unknown"
+
+    # 真正的拦截信号不受影响：「被拦截」与「执行了副作用」本来就是两件事。
+    assert InconclusiveReason.legacy("side_effect_blocked").code == "side_effect_blocked"
+    assert InconclusiveReason.legacy("side_effect_gate").code == "side_effect_blocked"
+
+
+def test_replay_failures_are_classified_by_code_not_by_exception_type() -> None:
+    """分类只有一个出口：成因走 ``cause.code``，不靠异常类型区分。
+
+    引擎预检每次抛的都是同一个异常类型，成因的区分完全由结构化的 ``code`` 承担。
+    以前旁边有三个从不被抛出的子类，文档说它们用来区分成因，实际生产代码一处都没抛。
+    """
+
+    failures = [
+        (_failure([]), InconclusiveCode.INCOMPLETE_RECORDING.value),
+        (
+            _failure([item for item in recording() if item.seq != 2]),
+            InconclusiveCode.EVENT_SEQUENCE_GAP.value,
+        ),
+        (
+            _failure(recording(), parent(afr_recording={"complete": False})),
+            InconclusiveCode.RECORDING_LOSS.value,
+        ),
+    ]
+
+    for exc, expected in failures:
+        # 类型不参与区分：三次都是同一个异常类型……
+        assert type(exc) is ReplayExhaustedError
+        # ……成因由 code 决定。
+        assert exc.cause.code == expected
+    # 而且这些成因确实互不相同，不是同一个码换了名字。
+    assert len({code for _, code in failures}) == len(failures)
+    # 「按异常类型区分成因」这个出口没有被悄悄加回来：它只有这一个类型。
+    assert ReplayExhaustedError.__subclasses__() == []
 
 
 def test_exhausted_error_can_carry_an_already_structured_cause() -> None:

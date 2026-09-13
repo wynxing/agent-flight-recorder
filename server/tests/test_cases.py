@@ -187,6 +187,84 @@ def test_complete_recording_without_blocked_steps_still_reaches_a_real_verdict(m
     assert stored[0][4] is None
 
 
+def test_error_verdict_carries_a_cause(monkeypatch) -> None:
+    """契约：结论不是 passed / failed 时必须带成因，error 也不例外。
+
+    error 的成因回答的是「为什么没有可信结论」——这次回放本身就没跑成功。它与
+    「录制不完整」「副作用被拦截」是三类不同的问题，因此同样不能没有成因。
+    """
+
+    from types import SimpleNamespace
+
+    from afr_server import cases
+
+    stored = []
+    monkeypatch.setattr(cases, "_store", lambda *args: stored.append(args))
+    monkeypatch.setattr(cases, "get_events", lambda *a, **k: [])
+    monkeypatch.setattr(cases, "final_output_of", lambda events: "boom")
+    monkeypatch.setattr(
+        cases,
+        "execute_replay",
+        lambda *a: SimpleNamespace(status="failed", complete=True, reason=None),
+    )
+    cases._execute(None, "run-1", "case", {"assertions": [{"type": "no_error"}]})
+
+    verdict, cause = stored[0][2], stored[0][4]
+    assert verdict == "error"
+    assert cause is not None
+    assert cause.code == "unknown"
+    # 成因要能让人看出是执行本身失败，而不是录制质量或副作用策略。
+    assert "failed" in cause.detail
+
+
+def test_hard_failure_carries_a_cause_too(monkeypatch) -> None:
+    """执行直接抛异常时（error 结论的另一条来源）同样要留下成因。"""
+
+    from afr_server import cases
+
+    stored = []
+    monkeypatch.setattr(cases, "_store", lambda *args: stored.append(args))
+
+    def _explode(*args):
+        raise RuntimeError("agent 进程挂了")
+
+    monkeypatch.setattr(cases, "_execute", _explode)
+    cases._job(None, "run-1", "case", {"assertions": []})
+
+    verdict, cause = stored[0][2], stored[0][4]
+    assert verdict == "error"
+    assert cause is not None
+    assert cause.code == "unknown"
+    assert "RuntimeError" in cause.detail
+
+
+def test_passed_verdict_has_no_cause(monkeypatch) -> None:
+    """passed / failed 是「有结论」，因此不带成因——成因只解释为什么没有可信结论。"""
+
+    from types import SimpleNamespace
+
+    from afr_server import cases
+
+    stored = []
+    monkeypatch.setattr(cases, "_store", lambda *args: stored.append(args))
+    monkeypatch.setattr(cases, "get_events", lambda *a, **k: [])
+    monkeypatch.setattr(cases, "final_output_of", lambda events: "ok")
+    monkeypatch.setattr(
+        cases,
+        "execute_replay",
+        lambda *a: SimpleNamespace(status="succeeded", complete=True, reason=None),
+    )
+    monkeypatch.setattr(
+        cases,
+        "evaluate_assertions",
+        lambda *a: [SimpleNamespace(passed=True, model_dump=lambda mode=None: {"passed": True})],
+    )
+    cases._execute(None, "run-1", "case", {"assertions": [{"type": "no_error"}]})
+
+    assert stored[0][2] == "passed"
+    assert stored[0][4] is None
+
+
 def test_case_status_is_recorded_when_agent_is_unavailable(client, make_run) -> None:
     """没有注册可重建的 Agent 时，用例应当明确失败，而不是永远停在"执行中"。"""
 

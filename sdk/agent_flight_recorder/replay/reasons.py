@@ -210,15 +210,19 @@ _LEGACY_CODES: dict[str, str] = {
     "final_output_changed": InconclusiveCode.FINAL_OUTPUT_CHANGED.value,
     "side_effect_gate": InconclusiveCode.SIDE_EFFECT_BLOCKED.value,
     "side_effect_blocked": InconclusiveCode.SIDE_EFFECT_BLOCKED.value,
-    "side_effect_executed": InconclusiveCode.SIDE_EFFECT_BLOCKED.value,
 }
 
 
 def _code_in_text(text: str) -> str | None:
-    """整句散文里认码：只在没有任何更可靠信息时才用，因此别名按长度降序匹配。"""
+    """整句散文里认码：只在没有任何更可靠信息时才用，因此别名按长度降序匹配。
+
+    别名有下划线与空格两种历史写法（``recording_loss`` 与 ``recording loss``），
+    所以逐个比对原文与它的空格形式：只比对空格形式会漏掉下划线写法，只比对原文
+    会漏掉空格写法，两条都要有。
+    """
 
     for alias in sorted(_LEGACY_CODES, key=len, reverse=True):
-        if alias in text.replace("_", "_") or alias.replace("_", " ") in text:
+        if alias in text or alias.replace("_", " ") in text:
             return _LEGACY_CODES[alias]
     return None
 

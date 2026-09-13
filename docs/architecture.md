@@ -241,8 +241,8 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 | `events` | `id`, `run_id`, `seq`, `type`, `name`, `input`, `output`, `error`, `tokens`, `side_effect`, `effect_source` | **唯一约束 `(run_id, seq)`**，这是幂等性的物理保证 |
 | `cases` | `id`, `source_run_id`, `from_seq`, `assertions`, `effect_policy`, `last_status`, `last_results`, `last_cause` | `source_run_id` 建索引 |
 
-`cases.last_cause` 存最近一次结论的结构化成因（`{code, detail}`）：只有结论没有成因，用户无从知道该去
-看录制质量还是副作用策略。新增可空列的补齐由 `db._add_missing_columns` 在启动时做（可重入，SQLite 单文件），
+`cases.last_cause` 存最近一次结论的结构化成因（`{code, detail}`），契约为「结论不是 passed / failed 时非空」：
+只有结论没有成因，用户无从知道该去看录制质量、副作用策略还是执行本身。新增可空列的补齐由 `db._add_missing_columns` 在启动时做（可重入，SQLite 单文件），
 因此已有库不需要重建。
 
 **事件表是 append-only 的**：代码里只有插入与存在性检查，没有任何更新路径。
