@@ -150,6 +150,10 @@ PYTHON_PRODUCTION_SITES: dict[str, tuple[str, str]] = {
         "server/afr_server/cases.py",
         "InconclusiveCode.SIDE_EFFECT_BLOCKED.value",
     ),
+    "budget_exceeded": (
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "InconclusiveCode.BUDGET_EXCEEDED.value",
+    ),
     "unknown": (
         "server/afr_server/cases.py",
         "InconclusiveCode.UNKNOWN.value",

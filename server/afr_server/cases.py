@@ -16,6 +16,7 @@ from agent_flight_recorder.models import (
     ATTR_GATE,
     EffectPolicy,
     EffectSource,
+    ReplayBudget,
     ReplayPreset,
     new_id,
     utcnow,
@@ -102,6 +103,7 @@ def submit_case_run(
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
 ) -> str:
@@ -112,6 +114,7 @@ def submit_case_run(
         from_seq=from_seq,
         preset=preset,
         policy=policy,
+        budget=budget,
         model=model,
         system_prompt=system_prompt,
     )
@@ -125,6 +128,7 @@ def run_case_blocking(
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
     on_started: Callable[[str], None] | None = None,
@@ -145,6 +149,7 @@ def run_case_blocking(
         from_seq=from_seq,
         preset=preset,
         policy=policy,
+        budget=budget,
         model=model,
         system_prompt=system_prompt,
     )
@@ -160,6 +165,7 @@ def _prepare_case_run(
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
 ) -> tuple[str, ReplayPlan, dict[str, Any]]:
@@ -192,6 +198,8 @@ def _prepare_case_run(
         from_seq=from_seq or snapshot["from_seq"] or 1,
         preset=resolved_preset,
         policy=policy or _policy(snapshot.get("policy")),
+        # 上限只约束这一次执行；批量级的聚合预算不在本轮范围（见 issue #12 的非目标）。
+        budget=budget,
         model=model or snapshot.get("model"),
         system_prompt=system_prompt if system_prompt is not None else snapshot.get("system_prompt"),
         labels={"case_id": case_id, "case_name": snapshot["name"]},

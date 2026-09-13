@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 
@@ -35,6 +35,35 @@ def client(app_env: Path):
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture()
+def seeded_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """一个真的会播种的客户端。
+
+    app_env 默认关掉播种（否则每个测试都要等一次 seed），这个 fixture 显式打开：需要
+    「一条真实的父 Run + 一个已注册的 Agent」的端到端测试都用它，免得每个测试模块各自
+    维护一份播种样板。
+    """
+
+    monkeypatch.setenv("AFR_DB_PATH", str(tmp_path / "afr-seed.db"))
+    monkeypatch.setenv("AFR_SEED_ON_STARTUP", "true")
+
+    from afr_server import config, db
+
+    config.get_settings.cache_clear()
+    db.reset_engine()
+    db.init_db()
+
+    from afr_server.main import app
+    from fastapi.testclient import TestClient
+
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        db.reset_engine()
+        config.get_settings.cache_clear()
 
 
 @pytest.fixture()

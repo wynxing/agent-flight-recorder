@@ -34,7 +34,7 @@ from .cases import create_case, snapshot_of, submit_case_run
 from .config import get_settings
 from .db import init_db, session_scope
 from .diff import diff_runs
-from .replay_runner import build_plan, submit_replay
+from .replay_runner import build_plan, estimate_replay, submit_replay
 from .schemas import (
     AgentInfo,
     CaseCreateRequest,
@@ -42,6 +42,7 @@ from .schemas import (
     CaseListResponse,
     CaseRunRequest,
     CaseRunResponse,
+    ReplayEstimateResponse,
     ReplayRequest,
     ReplayResponse,
     RunDetailResponse,
@@ -295,36 +296,14 @@ def export_otel(run_id: str) -> dict[str, Any]:
 
 @app.post("/v1/runs/{run_id}/replay", response_model=ReplayResponse)
 def start_replay(run_id: str, payload: ReplayRequest) -> ReplayResponse:
-    with session_scope() as session:
-        row = get_run(session, run_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-        agent_name = row.agent_name
-        if (row.meta or {}).get("runtime") == "pi":
-            raise HTTPException(status_code=409, detail="pi 回放请使用 integrations/pi 本地运行器；服务端不执行 Node。")
-        events = get_events(session, run_id)
-        max_seq = max((event.seq for event in events), default=0)
-
-    if payload.from_seq > max_seq:
-        raise HTTPException(
-            status_code=400,
-            detail=f"from_seq {payload.from_seq} 超出该 Run 的最大步数 {max_seq}",
-        )
-
-    if agent_name not in load_agent_specs():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"agent {agent_name!r} 没有注册可重建的 Agent，无法在服务端发起回放。"
-                "请安装对应的 Agent 包（entry point 组 afr.agents）。"
-            ),
-        )
+    _require_replayable(run_id, payload.from_seq)
 
     plan = build_plan(
         run_id,
         from_seq=payload.from_seq,
         preset=payload.preset,
         policy=payload.policy,
+        budget=payload.budget,
         model=payload.model,
         system_prompt=payload.system_prompt,
         labels=payload.labels,
@@ -336,6 +315,57 @@ def start_replay(run_id: str, payload: ReplayRequest) -> ReplayResponse:
         from_seq=plan.from_seq,
         plan_summary=_plan_summary(plan),
     )
+
+
+@app.post("/v1/runs/{run_id}/replay/estimate", response_model=ReplayEstimateResponse)
+def estimate_replay_endpoint(run_id: str, payload: ReplayRequest) -> ReplayEstimateResponse:
+    """预估这次回放大概要花多少：预计几次真实模型调用、大概多少成本。
+
+    纯计算：不调用任何模型，也不创建 Run。父 Run 缺 token 或模型不在价格表内时，
+    成本如实返回 null（无法预估），而不是给一个编出来的数字。
+    """
+
+    _require_replayable(run_id, payload.from_seq)
+    plan = build_plan(
+        run_id,
+        from_seq=payload.from_seq,
+        preset=payload.preset,
+        policy=payload.policy,
+        budget=payload.budget,
+        model=payload.model,
+        system_prompt=payload.system_prompt,
+    )
+    estimate = estimate_replay(plan)
+    return ReplayEstimateResponse(**estimate.model_dump())
+
+
+def _require_replayable(run_id: str, from_seq: int) -> None:
+    """回放与预估共用的前置检查：起不来的回放，两个端点给同一个理由。"""
+
+    with session_scope() as session:
+        row = get_run(session, run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        agent_name = row.agent_name
+        if (row.meta or {}).get("runtime") == "pi":
+            raise HTTPException(status_code=409, detail="pi 回放请使用 integrations/pi 本地运行器；服务端不执行 Node。")
+        events = get_events(session, run_id)
+        max_seq = max((event.seq for event in events), default=0)
+
+    if from_seq > max_seq:
+        raise HTTPException(
+            status_code=400,
+            detail=f"from_seq {from_seq} 超出该 Run 的最大步数 {max_seq}",
+        )
+
+    if agent_name not in load_agent_specs():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"agent {agent_name!r} 没有注册可重建的 Agent，无法在服务端发起回放。"
+                "请安装对应的 Agent 包（entry point 组 afr.agents）。"
+            ),
+        )
 
 
 def _plan_summary(plan) -> str:
@@ -426,6 +456,7 @@ def run_case(case_id: str, payload: CaseRunRequest) -> CaseRunResponse:
             case_id,
             from_seq=payload.from_seq,
             preset=payload.preset,
+            budget=payload.budget,
             model=payload.model,
             system_prompt=payload.system_prompt,
         )

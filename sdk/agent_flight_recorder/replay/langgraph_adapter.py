@@ -194,6 +194,8 @@ class ReplayMiddleware(AgentMiddleware):
         ]
         tokens = usage_to_tokens(ai_message)
         model_name = self._model_name(request)
+        # 这一步的成本既是记账也是预算依据：账本只认真实发生的调用。
+        cost = estimate_cost(model_name, tokens.get("input"), tokens.get("output")) if tokens else None
 
         event = self.recorder.record(
             EventType.MODEL_CALL,
@@ -206,7 +208,7 @@ class ReplayMiddleware(AgentMiddleware):
                 "message": message_to_dict(ai_message),
             },
             tokens=tokens,
-            cost_usd=estimate_cost(model_name, tokens.get("input"), tokens.get("output")) if tokens else None,
+            cost_usd=cost,
             effect_source=EffectSource.LIVE,
             source_seq=plan.parent_seq,
             started_at=started,
@@ -216,6 +218,8 @@ class ReplayMiddleware(AgentMiddleware):
         )
         if event is not None:
             self.session.observe(event, plan.parent_seq)
+        # 调用真的发生了就进账，哪怕这条事件没能被记录器写下去。
+        self.session.record_live_model_call(cost)
 
     def _replayed_tool_result(self, request: ToolCallRequest, plan: StepPlan) -> ToolMessage:
         tool_call = request.tool_call or {}
@@ -468,10 +472,15 @@ def run_replay(
     except ReplayExhaustedError as exc:
         # 成因已经从异常上带出来了：这里不再重新拼字符串，也不再另起一个名字。
         recorder.record_error(exc, reason="replay_exhausted")
-        recorder.finish(status=RunStatus.FAILED)
+        # 因预算停止不是「失败」，而是「没跑完」：Run 状态用 aborted（与 pi 侧对预算触顶
+        # 的处置一致），结论由成因码 budget_exceeded 表达，用例判定落到 inconclusive。
+        # 其余成因（录制不足等）保持原来的 failed，语义不变。
+        stopped_by_budget = exc.cause.code == InconclusiveCode.BUDGET_EXCEEDED.value
+        status = RunStatus.ABORTED if stopped_by_budget else RunStatus.FAILED
+        recorder.finish(status=status)
         return session.to_result(
             run_id=recorder.run_id,
-            status=RunStatus.FAILED.value,
+            status=status.value,
             error=str(exc),
             complete=False,
             cause=exc.cause,

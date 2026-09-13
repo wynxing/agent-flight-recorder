@@ -5,6 +5,8 @@ import type {
   CaseRunResponse,
   EffectMode,
   EffectPolicy,
+  ReplayBudget,
+  ReplayEstimateResponse,
   ReplayPreset,
   ReplayResponse,
   RunDetailResponse,
@@ -57,6 +59,8 @@ export interface ReplayRequestPayload {
   from_seq: number
   preset?: ReplayPreset
   policy?: EffectPolicy
+  /** 硬上限；不传就是「不设上限」，与没有这套能力时行为一致。 */
+  budget?: ReplayBudget | null
   model?: string
   system_prompt?: string
   labels?: Record<string, string>
@@ -99,6 +103,13 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /** 预估这次回放要花多少：不调用模型，也不创建 Run。 */
+  estimateReplay: (runId: string, payload: ReplayRequestPayload) =>
+    request<ReplayEstimateResponse>(`/v1/runs/${runId}/replay/estimate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   diff: (a: string, b: string) => request<RunDiff>(`/v1/diff?a=${a}&b=${b}`),
 
   cases: () => request<{ cases: CaseItem[] }>('/v1/cases'),
@@ -110,7 +121,14 @@ export const api = {
 
   runCase: (
     caseId: string,
-    payload: { from_seq?: number; preset?: ReplayPreset; model?: string; system_prompt?: string },
+    payload: {
+      from_seq?: number;
+      preset?: ReplayPreset;
+      /** 这一次执行的硬上限；不传就是「不设上限」。 */
+      budget?: ReplayBudget | null;
+      model?: string;
+      system_prompt?: string;
+    },
   ) =>
     request<CaseRunResponse>(`/v1/cases/${caseId}/run`, {
       method: 'POST',

@@ -142,6 +142,7 @@ export const INCONCLUSIVE_CODES = [
   'model_context_changed',
   'final_output_changed',
   'side_effect_blocked',
+  'budget_exceeded',
   'unknown',
 ] as const
 
@@ -156,7 +157,7 @@ export interface InconclusiveCause {
  * 视觉分档。录制质量与「副作用被拦截」是两件完全不同的事，不能同色；
  * 集合之外落 unknown，用中性色表示「还说不清」。
  */
-export type CauseTone = 'recording' | 'blocked' | 'unknown'
+export type CauseTone = 'recording' | 'blocked' | 'budget' | 'unknown'
 
 /** 每个成因的中文说明与**可操作的下一步**。只说「无法判断」而没有下一步是不合格的。 */
 export const CAUSE_INFO: Record<InconclusiveCode, { label: string; action: string; tone: CauseTone }> = {
@@ -209,6 +210,11 @@ export const CAUSE_INFO: Record<InconclusiveCode, { label: string; action: strin
     label: '副作用被拦截',
     action: '副作用被闸门拦截，本次执行没有真实发生——这不是结论不通过。确认安全后可显式允许真实执行再跑一次。',
     tone: 'blocked',
+  },
+  budget_exceeded: {
+    label: '因预算停止',
+    action: '本次回放因达到预算上限而停止，已花费的调用次数与成本都如实记账。这不是「没通过」，而是没有跑完：提高上限或缩小回放范围后可重跑。',
+    tone: 'budget',
   },
   unknown: {
     label: '未知成因',

@@ -17,6 +17,7 @@ export type InconclusiveCode =
   | 'model_context_changed'
   | 'final_output_changed'
   | 'side_effect_blocked'
+  | 'budget_exceeded'
   | 'unknown';
 
 export interface InconclusiveReason { code: InconclusiveCode; detail: string; }
@@ -25,7 +26,8 @@ export interface InconclusiveReason { code: InconclusiveCode; detail: string; }
 export const CAUSE_CODES = [
   'incomplete_recording', 'event_sequence_gap', 'redacted_replay_data', 'recording_loss',
   'truncated_context', 'missing_recorded_response', 'missing_initial_state',
-  'model_context_changed', 'final_output_changed', 'side_effect_blocked', 'unknown',
+  'model_context_changed', 'final_output_changed', 'side_effect_blocked', 'budget_exceeded',
+  'unknown',
 ] as const satisfies readonly InconclusiveCode[];
 
 const KNOWN = new Set<string>(CAUSE_CODES);
@@ -108,7 +110,8 @@ function codeInText(text: string): InconclusiveCode | undefined {
 export const CAUSE_PRECEDENCE: Record<InconclusiveCode, number> = {
   incomplete_recording: 0, event_sequence_gap: 1, redacted_replay_data: 2, recording_loss: 3,
   truncated_context: 4, missing_initial_state: 5, missing_recorded_response: 6,
-  model_context_changed: 7, final_output_changed: 8, side_effect_blocked: 9, unknown: 10,
+  model_context_changed: 7, final_output_changed: 8, side_effect_blocked: 9,
+  budget_exceeded: 10, unknown: 11,
 };
 
 export function mostSignificant(causes: (InconclusiveReason | undefined | null)[]): InconclusiveReason | undefined {

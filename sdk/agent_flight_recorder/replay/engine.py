@@ -21,10 +21,12 @@ from ..models import (
     EffectPolicy,
     Event,
     EventType,
+    ReplayBudget,
     ReplayPreset,
     RunRecord,
     SideEffect,
 )
+from .budget import STOPPED_BY_COST, STOPPED_BY_MODEL_CALLS, BudgetLedger, BudgetUsage
 from .effects import RecordedEffects, RecordedModelResponse, RecordedToolResult
 from .fork import Fork, behavioral_steps, classify_step
 from .reasons import InconclusiveCode, InconclusiveReason
@@ -76,6 +78,8 @@ class ReplayPlan(BaseModel):
     from_seq: int
     policy: EffectPolicy = Field(default_factory=EffectPolicy.reproduce)
     overrides: ReplayOverrides = Field(default_factory=ReplayOverrides)
+    #: 硬上限。默认一个都不设，因此不声明预算的回放行为与加这套能力之前完全一致。
+    budget: ReplayBudget = Field(default_factory=ReplayBudget)
     agent_name: str | None = None
     agent_version: str | None = None
     prompt_version: str | None = None
@@ -133,6 +137,9 @@ class ReplayResult(BaseModel):
     reason: InconclusiveReason | None = None
     #: 旧载荷里自由文本 reason 的原文，仅在做历史兼容解析时保留。
     legacy_reason: str | None = None
+    #: 预算记账（已用 / 上限 / 是否触顶）。没有声明上限时为 None：没声明过上限的回放
+    #: 不该凭空多出一个「上限：无」的记账对象。
+    budget: BudgetUsage | None = None
 
 
 class ReplaySession:
@@ -158,6 +165,8 @@ class ReplaySession:
         self.first_fork: Fork | None = None
         self.forks: list[Fork] = []
         self.steps: list[StepPlan] = []
+        #: 预算账本。只记真实发生的模型调用；recorded 复现既不计次也不计费。
+        self.ledger = BudgetLedger(self.plan.budget)
         #: 已判定的成因（结构化的）。一旦置上，后续步骤不再解析。
         self.incomplete_reason: InconclusiveReason | None = None
 
@@ -254,6 +263,20 @@ class ReplaySession:
                 downgraded=decision.downgraded,
             )
 
+        # 预算判定就在步边界上：这一步真要发出去之前先看账，超了就停在这里。
+        # 只有真实执行的步骤参与判定——读取录制结果的步骤既不花钱也不占次数，因此
+        # 复现模式永远不会被预算逻辑误伤（见 docs/replay-semantics.md 第 9 节）。
+        # 已经发出的那次调用允许完成并如实记账，这里不做预测性中断。
+        if plan.mode is EffectMode.LIVE:
+            stopped_by = self.ledger.exceeded_by()
+            if stopped_by is not None:
+                self.ledger.stopped_by = stopped_by
+                self.incomplete_reason = InconclusiveReason.from_code(
+                    InconclusiveCode.BUDGET_EXCEEDED.value,
+                    self.budget_stop_detail(stopped_by),
+                )
+                raise ReplayExhaustedError(self.incomplete_reason)
+
         self.steps.append(plan)
         return plan
 
@@ -269,6 +292,38 @@ class ReplaySession:
         return fork
 
     # ------------------------------------------------------------------ 效果
+
+    def record_live_model_call(self, cost_usd: float | None) -> None:
+        """记一次已经完成的真实模型调用。由适配层在调用返回后调用。"""
+
+        self.ledger.note_model_call(cost_usd)
+
+    def budget_usage(self) -> BudgetUsage:
+        """当前账目（已用 / 上限 / 是否触顶）。"""
+
+        return self.ledger.usage()
+
+    def budget_stop_detail(self, stopped_by: str) -> str:
+        """触顶时的说明：说清停在哪一维、已用多少，并给出下一步。"""
+
+        usage = self.budget_usage()
+        if stopped_by == STOPPED_BY_MODEL_CALLS:
+            head = (
+                f"已达到本次回放的模型调用上限：已用 {usage.model_calls_used} 次"
+                f"（上限 {usage.max_model_calls} 次）。"
+            )
+        elif stopped_by == STOPPED_BY_COST:
+            head = (
+                f"已达到本次回放的成本上限：已用约 ${usage.cost_used_usd:.6f}"
+                f"（上限 ${usage.max_cost_usd}，估算）。"
+            )
+        else:  # pragma: no cover - 目前只有两个维度
+            head = "已达到本次回放的预算上限。"
+        return (
+            head
+            + "回放已在步边界停止，没有继续发起新的模型调用；已经发出的那次调用已如实记账。"
+            + "提高上限或缩小回放范围后可以重跑。"
+        )
 
     def recorded_model_response(self, parent_seq: int | None) -> RecordedModelResponse:
         response = self.effects.model_response_at(parent_seq)
@@ -301,6 +356,8 @@ class ReplaySession:
             kwargs["reason"] = InconclusiveReason.from_dict(legacy)
             if isinstance(legacy, str):
                 kwargs["legacy_reason"] = legacy
+        if "budget" not in kwargs and self.plan.budget.is_set:
+            kwargs["budget"] = self.budget_usage()
         return ReplayResult(
             parent_run_id=self.plan.parent_run_id,
             from_seq=self.plan.from_seq,

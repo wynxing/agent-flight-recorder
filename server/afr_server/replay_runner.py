@@ -13,6 +13,7 @@ from typing import Any
 
 from agent_flight_recorder.models import (
     EffectPolicy,
+    ReplayBudget,
     ReplayPreset,
     RunRecord,
     RunStatus,
@@ -20,6 +21,7 @@ from agent_flight_recorder.models import (
     utcnow,
 )
 from agent_flight_recorder.recorder import Recorder
+from agent_flight_recorder.replay.budget import ReplayEstimate, estimate_replay_budget
 from agent_flight_recorder.replay.engine import ReplayPlan, ReplaySession
 from agent_flight_recorder.replay.engine import ReplayExhaustedError, ensure_replay_context
 from agent_flight_recorder.replay.langgraph_adapter import apply_plan_to_recorder, run_replay
@@ -42,6 +44,7 @@ def build_plan(
     from_seq: int,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
     overrides: dict[str, Any] | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
@@ -60,6 +63,7 @@ def build_plan(
         parent_run_id=parent_run_id,
         from_seq=from_seq,
         policy=resolved,
+        budget=budget or ReplayBudget(),
         overrides=overrides_payload,
         labels=dict(labels or {}),
     )
@@ -101,6 +105,21 @@ def preflight_cause(plan: ReplayPlan) -> InconclusiveReason | None:
     except ReplayExhaustedError as exc:
         return exc.cause
     return None
+
+def estimate_replay(plan: ReplayPlan) -> ReplayEstimate:
+    """预估一次回放要花多少。纯计算：不调用任何模型，也不创建 Run。
+
+    与真正的执行共用同一套策略解析与同一份录制，因此预估与实跑不会说两套话：
+    分叉点之前的步骤一律按录制结果复现，只有解析成 live 的模型调用才计入。
+    """
+
+    with session_scope() as session:
+        parent_row = get_run(session, plan.parent_run_id)
+        if parent_row is None:
+            raise ValueError(f"parent run not found: {plan.parent_run_id}")
+        parent_run: RunRecord = run_to_record(parent_row)
+        parent_events = get_events(session, plan.parent_run_id)
+    return estimate_replay_budget(plan, parent_run, parent_events)
 
 
 def prepare_run(
@@ -221,25 +240,24 @@ def execute_replay(plan: ReplayPlan, replay_run_id: str):
             f"batches_failed={recorder.stats.batches_failed}）",
         )
 
+    replay_meta: dict[str, Any] = {
+        "parent_run_id": plan.parent_run_id,
+        "from_seq": plan.from_seq,
+        "policy": plan.policy.model_dump(mode="json"),
+        "first_fork": result.first_fork.model_dump(mode="json") if result.first_fork else None,
+        "forks": [fork.model_dump(mode="json") for fork in result.forks],
+        "verdict": result.status,
+        "complete": result.complete,
+        # 新增结构化成因；旧字段保持可读（结构与文本形态都能被解析回成因）。
+        "reason": result.reason.model_dump(mode="json") if result.reason else None,
+        "cause": result.reason.model_dump(mode="json") if result.reason else None,
+    }
+    if result.budget is not None:
+        # 记账只出现在声明了上限的回放上：没声明过上限的回放不该凭空多出一个
+        # 「上限：无」的账目，因此不设上限的行为与加这套能力之前逐字一致。
+        replay_meta["budget"] = result.budget.model_dump(mode="json")
     with session_scope() as db:
-        update_run_metadata(
-            db,
-            replay_run_id,
-            {
-                "afr_replay": {
-                    "parent_run_id": plan.parent_run_id,
-                    "from_seq": plan.from_seq,
-                    "policy": plan.policy.model_dump(mode="json"),
-                    "first_fork": result.first_fork.model_dump(mode="json") if result.first_fork else None,
-                    "forks": [fork.model_dump(mode="json") for fork in result.forks],
-                    "verdict": result.status,
-                    "complete": result.complete,
-                    # 新增结构化成因；旧字段保持可读（结构与文本形态都能被解析回成因）。
-                    "reason": result.reason.model_dump(mode="json") if result.reason else None,
-                    "cause": result.reason.model_dump(mode="json") if result.reason else None,
-                }
-            },
-        )
+        update_run_metadata(db, replay_run_id, {"afr_replay": replay_meta})
     return result
 
 

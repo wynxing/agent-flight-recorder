@@ -45,6 +45,10 @@ class InconclusiveCode(str, Enum):
     # 执行被策略拦下：这次执行本来就没有真实发生，不是结论不通过。
     SIDE_EFFECT_BLOCKED = "side_effect_blocked"
 
+    # 执行被预算上限停下：这次回放没有跑完，因此给不出结论——但它不是「不通过」，
+    # 也不是「录制有问题」。同类错误在第 2、5 轮各返工过一次，这里不再重犯。
+    BUDGET_EXCEEDED = "budget_exceeded"
+
     # 闭集的兜底取值：集合之外的取值显式落在这里并保留原文。
     UNKNOWN = "unknown"
 
@@ -65,7 +69,9 @@ CAUSE_PRECEDENCE: dict[str, int] = {
     InconclusiveCode.MODEL_CONTEXT_CHANGED.value: 7,
     InconclusiveCode.FINAL_OUTPUT_CHANGED.value: 8,
     InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,
-    InconclusiveCode.UNKNOWN.value: 10,
+    # 「预算耗尽」比「某一步被拦下」更根本：整次回放根本没跑完，后面什么都没验证。
+    InconclusiveCode.BUDGET_EXCEEDED.value: 10,
+    InconclusiveCode.UNKNOWN.value: 11,
 }
 
 

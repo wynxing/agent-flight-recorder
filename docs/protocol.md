@@ -108,6 +108,27 @@ Run 表示一次完整的 Agent 执行。回放产生的是**新的 Run**，不�
 
 `write` / `external` 在回放中默认被强制降级为 `dry_run`，仅在该步请求 live 时；recorded 继续读取录制结果。要真实执行必须同时满足：`allow_side_effect_execution = true` **且** 该步的策略显式为 `live`。真实执行时引擎必须写入一条高可见度的告警事件（`attributes.severity = "warning"`），使这次副作用在时间线上无法被忽略。
 
+### 2.3 回放预算
+
+回放请求可以声明硬上限，两个维度各自独立：
+
+```json
+{ "from_seq": 15, "preset": "regress", "budget": { "max_cost_usd": 0.5, "max_model_calls": 20 } }
+```
+
+两个都不给就是**不设上限**，此时回放行为与没有这套能力时一致。上限在 **SDK 层**生效（回放引擎本来就能脱离平台独立运行）：达到任一上限时引擎在**步边界**停止，不再发起新的模型调用；已经发出的那次调用允许跑完并如实记账。
+
+触顶属于 `inconclusive`，成因码是 `budget_exceeded`（见 [回放语义](replay-semantics.md) 第 9 节），Run 状态是 `aborted` 而不是 `failed`。
+
+提交前可以先预估：
+
+```
+POST /v1/runs/{id}/replay/estimate   {from_seq, preset | policy, model?}
+                                    -> {parent_run_id, from_seq, model_calls, cost_usd, cost_is_estimate, detail}
+```
+
+预估**不调用任何模型**，也不创建 Run。父 Run 缺少可用 token 记录、或模型不在本地价格表内时，`cost_usd` 为 `null`（无法预估），而不是一个编造的数字。
+
 ## 3. Event
 
 Event 是 append-only 的。写入后不再修改。
@@ -179,9 +200,23 @@ Run 状态枚举不变。`metadata.afr_recording.complete=false` 表示 SDK 已�
 `metadata.afr_replay` 可包含 `complete`、`reason`、`cause` 和 `verdict`。用例结论为 passed / failed / inconclusive / error，运行 succeeded 不能单独证明评测通过。
 
 `metadata.afr_replay.cause` 是「为什么无法判断」的结构化成因，恒为 `{code, detail}`：`code` 是跨层共享的闭集取值（见 [回放语义](replay-semantics.md) 第 8 节），`detail` 是给人看的说明。`reason` 为兼容字段：新写入时与 `cause` 内容一致，历史数据里可能是自由字符串，服务端读取时归一化。用例侧的同一结构在 `cases.last_cause`；pi 上报时把结构直接放进 `afr_replay.reason`。
+
 `cases.last_cause` 的契约是：**结论不是 passed / failed（即 inconclusive 或 error）时非空，
 passed / failed 时为 `null`**。error 也会带上成因，它的 `code` 说明为什么这次执行没有可信结论；
 只有结论没有成因，用户就无从知道该去看录制质量、副作用策略还是执行本身。
+
+声明了上限的回放，`metadata.afr_replay.budget` 给出「已用 / 上限 / 是否触顶」的对照：
+
+| 字段 | 含义 |
+| --- | --- |
+| `max_cost_usd` / `max_model_calls` | 声明的上限；`null` 表示这一维不参与判定 |
+| `model_calls_used` | 已用：真实发生的模型调用次数 |
+| `cost_used_usd` | 已用成本（估算）；`null` = **未知**，不是 0 |
+| `cost_unknown` | 是否存在无法定价的真实调用 |
+| `exceeded` / `stopped_by` | 是否因触顶而停止、停在哪一维（`model_calls` / `cost`） |
+| `detail` | 一句人话说明 |
+
+没有声明上限的回放不带这个字段——「没声明」不等于「上限为 0」，也不该凭空多出一个「上限：无」的账目。
 
 pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器回放并产生新的 parent_run_id。
 

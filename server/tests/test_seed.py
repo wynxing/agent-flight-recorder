@@ -1,41 +1,12 @@
-"""播种链路：开箱即有数据，且自带一条开局即失败的回归用例。"""
+"""播种链路：开箱即有数据，且自带一条开局即失败的回归用例。
+
+播种客户端（seeded_client）定义在 conftest 里：回放预算等端到端测试也需要它。
+"""
 
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
-
-import pytest
-
-
-@pytest.fixture()
-def seeded_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """一个真的会播种的客户端。
-
-    conftest 的 app_env 默认关掉播种（否则每个测试都要等一次 seed），
-    这里显式打开——本文件测的就是播种本身。
-    """
-
-    monkeypatch.setenv("AFR_DB_PATH", str(tmp_path / "afr-seed.db"))
-    monkeypatch.setenv("AFR_SEED_ON_STARTUP", "true")
-
-    from afr_server import config, db
-
-    config.get_settings.cache_clear()
-    db.reset_engine()
-    db.init_db()
-
-    from afr_server.main import app
-    from fastapi.testclient import TestClient
-
-    try:
-        with TestClient(app) as client:
-            yield client
-    finally:
-        db.reset_engine()
-        config.get_settings.cache_clear()
 
 
 def _wait_for_seeded_case(client: Any, timeout: float = 90.0) -> dict[str, Any]:
