@@ -134,7 +134,7 @@ by_seq[seq]  >  by_kind[kind]  >  default  >  "recorded"
 | `server/` | FastAPI 服务端：入库、脱敏、回放调度、Diff、用例执行 |
 | `web/` | Vue 3 控制台：运行记录、时间线、回放面板、差异对比、回归用例 |
 | `examples/langgraph_sre_agent/` | 示例 Agent，同时也是回放能力的真实被测对象 |
-| `docs/` | [上报协议](docs/protocol.md) 与 [回放语义](docs/replay-semantics.md) |
+| `docs/` | 见下方「文档」一节 |
 | `scripts/` | `dev.ps1` 与 `test.ps1` |
 
 数据存放在 `data/afr.db`（SQLite 单文件，已加入 .gitignore）。删掉它就回到全新状态，下次启动会重新播种。
@@ -184,6 +184,17 @@ uv run python -m sre_agent.run --model gpt-5-mini --prompt grounded
 
 支持的断言类型：`no_error`、`final_output_contains`、`final_output_not_contains`、`final_output_matches`、
 `tool_called`（可带参数匹配）、`tool_not_called`、`tool_sequence_equals`、`max_tool_calls`。
+
+## 文档
+
+| 文档 | 内容 | 适合谁读 |
+| --- | --- | --- |
+| [产品需求文档](docs/PRD.md) | 问题定义、目标用户、用户旅程、能力范围、关键产品决策、成功标准、风险与路线 | 想知道"这东西解决什么问题、边界在哪"的人 |
+| [架构设计](docs/architecture.md) | 系统总览、分层与依赖方向、核心实体、关键数据流、设计决策与理由、并发模型、存储设计、扩展点、技术债 | 要读代码、接手维护或扩展它的人 |
+| [上报协议](docs/protocol.md) | SDK 与平台之间的数据契约（Run / Event / EffectPolicy / 幂等与续传 / 脱敏 / 版本策略） | 要写新语言 SDK 或对接上报的人 |
+| [回放语义](docs/replay-semantics.md) | 复现与回归的定义、策略优先级、副作用安全、确定性边界、分叉检测 | 要用回放能力、或想确认它到底能保证什么的人 |
+
+如果你只有五分钟，读 PRD 的第 1、2、6 节；如果要动手改代码，读架构设计的第 2、4、5 节。
 
 ## 上报协议
 
