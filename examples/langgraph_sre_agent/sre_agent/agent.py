@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Sequence
 
-from agent_flight_recorder import AgentSpec, Recorder, SideEffect
+from agent_flight_recorder import AgentSpec, Recorder, SeedCase, SideEffect
 from agent_flight_recorder.middleware import FlightRecorderMiddleware
 from agent_flight_recorder.serialization import text_of
 from langchain.agents import create_agent
@@ -114,6 +114,19 @@ def agent_spec() -> AgentSpec:
         default_system_prompt=DEFAULT_SYSTEM_PROMPT,
         prompt_presets={"default": DEFAULT_SYSTEM_PROMPT, "grounded": GROUNDED_SYSTEM_PROMPT},
         tool_side_effects=TOOL_SIDE_EFFECTS,
+        # 自带一条开局即失败的用例：默认 Prompt 下结论把症状当根因，切到 grounded 才会通过。
+        # 这样克隆下来什么都不用建，就能看到"失败 -> 改 Prompt -> 通过"的完整闭环。
+        seed_cases=[
+            SeedCase(
+                name="根因必须指向 REDIS_POOL_SIZE 配置回归",
+                description=(
+                    "种子运行的结论把症状（Redis 连接池耗尽）当成了根因。这条用例要求结论指向"
+                    "同期部署改动的配置项，因此用默认 Prompt 跑会失败，切到 grounded 才会通过。"
+                ),
+                from_seq=15,
+                assertions=[{"type": "final_output_contains", "value": "REDIS_POOL_SIZE"}],
+            )
+        ],
     )
 
 

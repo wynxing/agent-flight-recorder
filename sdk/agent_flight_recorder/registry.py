@@ -16,10 +16,30 @@ from dataclasses import dataclass, field
 from importlib.metadata import entry_points
 from typing import Any, Callable
 
-from .models import SideEffect
+from .models import ReplayPreset, SideEffect
 from .recorder import Recorder
 
 ENTRY_POINT_GROUP = "afr.agents"
+
+
+@dataclass
+class SeedCase:
+    """Agent 自带的演示用例：首次启动播种时创建并执行一次。
+
+    这里只描述"要建一条什么样的用例"，创建与执行完全复用 Case 的既有链路，
+    因此平台不需要硬编码任何一条具体断言。断言写成 dict 而不是 AssertionSpec：
+    断言求值是服务端的职责，SDK 不该反向依赖它。
+    """
+
+    name: str
+    assertions: list[dict[str, Any]] = field(default_factory=list)
+    description: str = ""
+    from_seq: int | None = None
+    to_seq: int | None = None
+    preset: ReplayPreset | None = None
+    model: str | None = None
+    system_prompt: str | None = None
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -35,6 +55,8 @@ class AgentSpec:
     default_system_prompt: str | None = None
     prompt_presets: dict[str, str] = field(default_factory=dict)
     tool_side_effects: dict[str, SideEffect] = field(default_factory=dict)
+    # 追加在末尾：用位置参数构造 AgentSpec 的现有写法不受影响。
+    seed_cases: list[SeedCase] = field(default_factory=list)
 
     def describe(self) -> dict[str, Any]:
         return {

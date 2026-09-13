@@ -15,7 +15,7 @@ from afr_server import replay_runner, storage
 from afr_server.db import session_scope
 from afr_server.diff import diff_runs
 from afr_server.transport import DirectTransport
-from sre_agent.agent import AGENT_NAME, run_scenario
+from sre_agent.agent import AGENT_NAME, agent_spec, run_scenario
 from sre_agent.prompts import GROUNDED_SYSTEM_PROMPT
 
 
@@ -262,3 +262,18 @@ def test_replay_is_recorded_as_a_new_run_pointing_at_its_parent(parent_run: str)
     assert child.parent_run_id == parent_run
     assert child.replay_from_seq == 3
     assert [row.id for row in children] == ["child-run"]
+
+
+def test_agent_spec_declares_exactly_one_seed_case() -> None:
+    """自带用例就是演示叙事本身：改了它的断言或起点，等于改了对外讲的闭环。"""
+
+    seed_cases = agent_spec().seed_cases
+
+    assert len(seed_cases) == 1
+    case = seed_cases[0]
+    # 第 15 步是那次模型调用：从它开始回放，前面 14 步照录制复现。
+    assert case.from_seq == 15
+    # 不指定 Prompt，才会按复现语义取录制结果 => 用例开局是红的。
+    assert case.system_prompt is None
+    assert case.preset is None
+    assert case.assertions == [{"type": "final_output_contains", "value": "REDIS_POOL_SIZE"}]

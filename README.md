@@ -2,6 +2,8 @@
 
 **Replay, debug and evaluate AI agents like software.**
 
+[![CI](https://github.com/wynxing/agent-flight-recorder/actions/workflows/ci.yml/badge.svg)](https://github.com/wynxing/agent-flight-recorder/actions/workflows/ci.yml)
+
 AI Agent 的黑匣子与可回放调试平台。它要回答的问题不是"如何构建一个 Agent"，而是：
 
 > 当 Agent 执行错误、结果异常或行为不可解释时，如何知道它到底发生了什么，并能够复现、验证和修复问题。
@@ -18,7 +20,8 @@ AI Agent 的黑匣子与可回放调试平台。它要回答的问题不是"如�
 pwsh scripts/dev.ps1
 ```
 
-打开 http://127.0.0.1:5273 就能看到控制台。首次启动会自动跑一次示例 Agent 落库，所以开箱即有数据。
+打开 http://127.0.0.1:5273 就能看到控制台。首次启动会自动跑一次示例 Agent 落库，并把它自带的那条回归用例跑成一个失败，
+所以开箱就有完整演示数据：一条运行记录 + 一条红色的用例，不用先自己去造失败样本。
 不带前端开发服务器时，`pwsh scripts/dev.ps1 -NoWeb` 会用服务端托管的已构建页面，地址是 http://127.0.0.1:7710 。
 
 跑一遍完整验证：
@@ -46,9 +49,12 @@ Agent 看到了全部证据，但把症状当成了根因。
 **5. 看差异。** 打开「运行对比」，基准选 seed 运行，对照选刚跑出来的回放。
 页面会指出第一个不同的步骤是"模型输出变化"，并显示工具调用序列完全一致。差异只在推理上，这正是换 Prompt 的预期效果。
 
-**6. 沉淀为用例。** 在回放结果页右侧输入用例名称和「结论应包含 `REDIS_POOL_SIZE`」，点「创建用例」。
-到「回归用例」页点「运行用例」：默认 Prompt 下会失败，在「以哪个 Prompt 运行」里选 `grounded` 就会通过。
-同一条断言，两种 Prompt，明确的通过或失败。
+**6. 看用例红绿翻转。** 打开「回归用例」，里面已经有一条播种时就跑过的用例：「根因必须指向 REDIS_POOL_SIZE 配置回归」，
+状态是**失败**——它断言结论必须指向配置回归，而默认 Prompt 跑出来的结论确实没有。
+在「以哪个 Prompt 运行」里选 `grounded`，点「运行用例」，同一条断言就通过了。同一条断言，两种 Prompt，明确的通过或失败。
+
+用例不是手搓的：它由 Agent 自己在 `AgentSpec.seed_cases` 里声明（见下方「接入自己的 Agent」），
+播种时走的就是界面创建用例的同一条链路。想自己建一条也可以在运行详情页右侧用「创建用例」。
 
 离线演示默认使用脚本化模型（`afr-scripted-sre-v1`），界面上会标注它是示例数据。这不是假装成真实模型的输出：
 剧本的分支由 system prompt 决定，因此"改 Prompt 导致结论改变"是真的发生了的行为差异。配置 `OPENAI_API_KEY` 后
@@ -137,7 +143,8 @@ by_seq[seq]  >  by_kind[kind]  >  default  >  "recorded"
 | `docs/` | 见下方「文档」一节 |
 | `scripts/` | `dev.ps1` 与 `test.ps1` |
 
-数据存放在 `data/afr.db`（SQLite 单文件，已加入 .gitignore）。删掉它就回到全新状态，下次启动会重新播种。
+数据存放在 `data/afr.db`（SQLite 单文件，已加入 .gitignore）。删掉它就回到全新状态，下次启动会重新播种
+——包括那条自带的用例，它会重新被建出来并跑成一个失败。
 
 ## 接入自己的 Agent
 
@@ -149,7 +156,7 @@ my-agent = "my_package.agent:agent_spec"
 ```
 
 ```python
-from agent_flight_recorder import AgentSpec, Recorder, SideEffect
+from agent_flight_recorder import AgentSpec, Recorder, SeedCase, SideEffect
 
 def build_my_agent(*, model=None, system_prompt=None, middleware=(), checkpointer=None):
     """回放引擎约定的工厂契约。为 None 表示沿用默认值。"""
@@ -162,6 +169,13 @@ def agent_spec() -> AgentSpec:
         seed=lambda recorder: run_once(recorder),   # 可选：首次启动时播种
         tool_side_effects={"notify_oncall": SideEffect.EXTERNAL},
         prompt_presets={"default": PROMPT_V1, "grounded": PROMPT_V2},  # 可选：界面里可切换
+        seed_cases=[                                # 可选：播种时连用例一起建，并立刻跑一次
+            SeedCase(
+                name="根因必须指向那次配置回归",
+                from_seq=15,
+                assertions=[{"type": "final_output_contains", "value": "REDIS_POOL_SIZE"}],
+            )
+        ],
     )
 ```
 

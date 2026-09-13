@@ -314,10 +314,10 @@ server/afr_server/
   storage.py             入库、脱敏、查询
   tables.py              表结构
   replay_runner.py       回放调度
-  cases.py               用例执行
+  cases.py               用例创建与执行
   assertions.py          确定性断言
   diff.py                差异计算
-  seed.py                首次启动播种
+  seed.py                首次启动播种（运行 + Agent 自带用例）
   db.py / config.py      连接与配置
   transport.py           服务端内部直写通道
   schemas.py             API 请求响应模型
@@ -334,4 +334,3 @@ examples/langgraph_sre_agent/
   sre_agent/scripted_model.py  离线确定性模型（两套剧本）
   sre_agent/prompts.py   默认版与修正版 Prompt
 ```
-

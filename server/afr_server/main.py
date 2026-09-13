@@ -20,7 +20,6 @@ from agent_flight_recorder.models import (
     IngestResponse,
     RunRecord,
     ReplayPreset,
-    new_id,
 )
 from agent_flight_recorder.otel import events_to_genai_spans
 from agent_flight_recorder.recorder import doctor as sdk_doctor
@@ -31,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .agents import describe_agents, load_agent_specs
-from .cases import snapshot_of, submit_case_run
+from .cases import create_case, snapshot_of, submit_case_run
 from .config import get_settings
 from .db import init_db, session_scope
 from .diff import diff_runs
@@ -378,34 +377,28 @@ def _source_run(session, row: CaseTable) -> RunRecord | None:
 
 
 @app.post("/v1/cases", response_model=CaseItem)
-def create_case(payload: CaseCreateRequest) -> CaseItem:
-    from agent_flight_recorder.models import utcnow
-
+def create_case_endpoint(payload: CaseCreateRequest) -> CaseItem:
     with session_scope() as session:
-        source = get_run(session, payload.source_run_id)
-        if source is None:
-            raise HTTPException(status_code=404, detail=f"run not found: {payload.source_run_id}")
+        try:
+            row = create_case(
+                session,
+                name=payload.name,
+                source_run_id=payload.source_run_id,
+                assertions=payload.assertions,
+                description=payload.description,
+                from_seq=payload.from_seq,
+                to_seq=payload.to_seq,
+                labels=payload.labels,
+                preset=payload.preset,
+                policy=payload.policy,
+                model=payload.model,
+                system_prompt=payload.system_prompt,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        row = CaseTable(
-            id=new_id(),
-            name=payload.name,
-            description=payload.description,
-            source_run_id=payload.source_run_id,
-            from_seq=payload.from_seq if payload.from_seq is not None else 1,
-            to_seq=payload.to_seq,
-            assertions=[item.model_dump(mode="json") for item in payload.assertions],
-            labels=payload.labels,
-            effect_policy={
-                "preset": payload.preset.value if payload.preset else None,
-                "policy": payload.policy.model_dump(mode="json") if payload.policy else None,
-                "model": payload.model,
-                "system_prompt": payload.system_prompt,
-            },
-            created_at=utcnow(),
-        )
-        session.add(row)
-        session.flush()
-        return case_to_item(row, run_to_record(source))
+        source = get_run(session, payload.source_run_id)
+        return case_to_item(row, run_to_record(source) if source else None)
 
 
 @app.get("/v1/cases/{case_id}", response_model=CaseItem)

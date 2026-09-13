@@ -36,7 +36,13 @@ from .models import (
     summarize_events,
 )
 from .recorder import DoctorReport, Recorder, RecorderStats, doctor, new_id
-from .registry import ENTRY_POINT_GROUP, AgentSpec, load_agent_specs, resolve_agent_spec
+from .registry import (
+    ENTRY_POINT_GROUP,
+    AgentSpec,
+    SeedCase,
+    load_agent_specs,
+    resolve_agent_spec,
+)
 from .serialization import message_to_dict, to_json_text, to_jsonable
 from .side_effects import AFR_SIDE_EFFECT_ATTR, afr_tool, resolve_side_effect
 
@@ -105,6 +111,7 @@ __all__ = [
     "RunSummary",
     "SDK_NAME",
     "SDK_VERSION",
+    "SeedCase",
     "SideEffect",
     "TokenUsage",
     "AgentSpec",
