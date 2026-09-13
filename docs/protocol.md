@@ -182,5 +182,35 @@ Run 状态枚举不变。`metadata.afr_recording.complete=false` 表示 SDK 已�
 `cases.last_cause` 的契约是：**结论不是 passed / failed（即 inconclusive 或 error）时非空，
 passed / failed 时为 `null`**。error 也会带上成因，它的 `code` 说明为什么这次执行没有可信结论；
 只有结论没有成因，用户就无从知道该去看录制质量、副作用策略还是执行本身。
-
 pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器回放并产生新的 parent_run_id。
+
+## 7. 批量套件
+
+批量运行（一次跑一批用例 × 一组条件）不改变上面的上报协议，它的契约只在服务端与控制台之间。
+三条约定是硬约束，不是实现细节：
+
+1. **条件随结果记录。** 每个格子都带 `condition = {prompt, model, system_prompt, preset}`，
+   `prompt` / `model` 由请求给出，`system_prompt` 是执行当时解析出来的 Prompt 正文，
+   `preset` 是实际用到的回放模式。同一条用例在不同条件下的结论因此分别可辨认。
+   给了 `prompt` 或 `model` 就按回归模式执行：复现模式完全使用录制结果，换 Prompt 或换模型
+   不会产生任何影响，那样的结论看起来正常、其实什么都没验证。
+2. **不合成总分。** 汇总只按条件分组给出四态计数与可判断率：
+   `determinable = passed + failed`，分母是该条件自己的 `total`，`undecided` 是拿不到结论的条数。
+   任何跨条件的合计分数（百分制、加权分、总通过率）都不提供，控制台也不自行计算（见 PRD 6.5）。
+3. **inconclusive 不等于 failed。** 聚合沿用 `code` + `detail` 的成因分类：
+   `inconclusive`、`error`、`failed` 三态分列，每个格子的成因逐条可见。
+
+```
+POST /v1/suites            {case_ids: [..] | all_cases: true, conditions: [{prompt, model}]}
+                           -> {suite_id, status, total, conditions}     # 立即返回，执行在后台
+GET  /v1/suites            -> {suites: [{id, status, total, completed, counts, errors, ...}]}
+GET  /v1/suites/{id}       -> {id, status, total, completed, counts, errors,
+                               groups: [{condition, label, total, completed, counts,
+                                         determinable, undecided, determinable_rate, errors,
+                                         items: [{case_id, condition, status, run_id, results, cause}]}]}
+```
+
+格子的状态取值是 `pending / running / passed / failed / inconclusive / error`；前两者是未完成态，
+不是结论，因此永远不会被并进 `failed`。用例侧的 `last_condition` 记录「最近一次结论是在什么条件下
+得出的」；单条运行不带条件时为 `null`（该入口允许直接传 Prompt 正文覆盖而不带版本名，
+凭空补一个条件名会把一次真实覆盖描述成「什么都没变」）。

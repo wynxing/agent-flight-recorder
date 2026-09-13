@@ -47,7 +47,7 @@ def init_db() -> None:
 #: 新增可空列。仓库刻意不引入迁移框架（SQLite 单文件、本地单用户），
 #: 因此这里只做最小、可重入的补齐：create_all 不会给已存在的表加列。
 _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
-    "cases": {"last_cause": "JSON"},
+    "cases": {"last_cause": "JSON", "last_condition": "JSON"},
 }
 
 
