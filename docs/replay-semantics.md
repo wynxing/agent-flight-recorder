@@ -20,7 +20,7 @@
 - 事件边界或 `seq` 序列不完整；
 - 父 Run 或任一事件发生过脱敏；
 - SDK 已知发生录制丢失（`metadata.afr_recording.complete = false`）；
-- 模型输入被截断（`message_count` 大于实际保存的 messages）；
+- 模型输入的消息条数被截断（录制只保留最近 80 条，`message_count` 大于实际保存的 messages 条数）；
 - 父 Run 记录了初始 input，但回放既没有把完整 `initial_state` 交给引擎，也没有显式标记 `metadata.afr_replay_context = "task_only"`。
 
 最后一条意味着：`initial_state` 不是"可选的优化"，而是复现可信度的前提。默认只构造 task 消息的快捷路径
@@ -38,9 +38,22 @@ task-only 快捷路径时才带这个标记——调用方显式传了 `initial_
 | 录制边界缺失 / `seq` 缺口 | `sdk/tests/test_replay_engine.py::test_recording_without_boundaries_is_rejected`、`::test_event_sequence_gap_is_rejected` |
 | 脱敏数据 | `::test_redacted_recording_is_rejected` |
 | 录制丢失标记 | `::test_recording_loss_marker_is_rejected` |
-| 截断上下文 | `::test_truncated_model_input_is_rejected` |
+| 消息条数被截断 | `::test_truncated_model_input_is_rejected` |
 | 缺少录制结果 | `::test_recorded_model_response_raises_when_missing`、`::test_unmatched_tool_call_returns_none_instead_of_guessing` |
 | 初始状态未被恢复 | `::test_initial_state_is_required_when_the_parent_recorded_one`、`examples/langgraph_sre_agent/tests/test_scenario.py::test_replay_refuses_to_guess_the_state_when_the_parent_recorded_one` |
+
+### 截断边界兜住了什么
+
+表里的「截断上下文」边界，判定依据是**消息条数**：录制时只保留最近 `MAX_MESSAGES`（80）条消息，
+若某次模型调用实际收到的消息条数多于保存下来的条数，`message_count` 就会大于 `messages` 的长度，
+引擎据此判为 `unsupported_context: truncated messages`。
+
+它**不覆盖**序列化层的字符串截断：`to_jsonable` 会对超长字符串做单值截断（`MAX_STRING` = 20000，
+超出部分替换为 `...[truncated N chars]` 标记）。这只改变单条消息内部的文本，不改变消息条数，
+`message_count` 与 `messages` 长度依然相等，因此不会触发 `unsupported_context`。读到
+`...[truncated N chars]` 标记时应当知道那个字段不是原文，不能把它当作完整上下文。
+
+也就是说，这个边界保证的是「没有整条消息被丢掉」，不保证「每条消息的文本都完整」。
 
 ### 回归（Regress）
 

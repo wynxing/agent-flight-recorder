@@ -34,6 +34,14 @@ pwsh scripts/dev.ps1
 pwsh scripts/test.ps1
 ```
 
+这条命令**不需要手工前置**：脚本会自己补上缺失的依赖（Python 工作区、`web/node_modules`、
+`integrations/pi/node_modules`），并在输出里说明补了什么，所以全新克隆直接跑即可。
+
+结论分三态，退出码与之一致：`全部验证通过` / `通过，但有未验证项`（会列出没跑到的检查）/ `失败`。
+只要存在任何跳过，脚本就不会输出「全部通过」。加 `-Strict` 时任何跳过都判为失败——CI 用的就是它，
+因此「CI 绿」等价于「Python、控制台与 pi 运行器都真的跑过」。只想跑 Python 用
+`pwsh scripts/test.ps1 -PythonOnly`；`-SkipInstall` 会关闭依赖引导，把缺失的依赖记为未验证项。
+
 ## 五分钟走完一遍闭环
 
 整个项目的价值都压在这一条路径上：**失败运行 → 时间线复盘 → 从某一步回放 → 改 Prompt 重跑 → 对比定位分叉 → 沉淀为用例**。
