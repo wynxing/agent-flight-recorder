@@ -319,7 +319,8 @@ def test_replay_refuses_to_guess_the_state_when_the_parent_recorded_one(afr_db) 
     result = replay_runner.execute_replay(ReplayPlan.reproduce(parent, from_seq=1), "no-context-run")
 
     assert result.complete is False
-    assert result.reason is not None and "unsupported_context" in result.reason
+    assert result.reason is not None
+    assert result.reason.code == "missing_initial_state"
     assert result.status == RunStatus.FAILED.value
 
 

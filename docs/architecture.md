@@ -169,6 +169,9 @@ POST /v1/cases/{id}/run
 | D9 | 上报幂等键 `(run_id, seq)` | 批次可重发、可续传 |
 | D10 | 回放 Run 先建行，再执行 | 回放是立刻可见的对象 |
 | D11 | Diff 忽略 `effect_source` | 否则每次回放对比全屏飘红 |
+| D12 | 「无法判断」的成因是跨层共享的闭集，码与说明分离 | 散文不能当码，三层不能各写各的名字 |
+| D13 | 副作用被拦与录制不完整给不同的 code | 一个去看录制质量，一个去看副作用策略 |
+| D14 | 成因归一化只做一次，且在服务端 | 控制台不再自建第二份解析与第三张码表 |
 
 ### 5.2 需要展开的几条
 
@@ -177,6 +180,18 @@ POST /v1/cases/{id}/run
 这是一个在实现过程中真实踩过的坑。最初把 `error` 也当作行为步骤，结果是：父 Run 里的一个错误事件占了位置，
 但回放过程不会为 `error` 推进游标，后续步骤整体错位，"第一个不同的步骤"随之失去意义。
 现在只有 `model_call` 与 `tool_call` 参与对齐；工具执行失败仍然会记录在 `tool_call` 的 `error` 字段里，信息不丢。
+
+**D12 / D13 为什么成因要跨层共享，且副作用拦截要单独给码**
+
+`inconclusive` 曾经只是四个字加一段自由文本：`reason` 里既有 `recording_loss` 这样的码，
+也有 `_no_recording_text(...)` 生成的整句英文。同一个概念在 SDK（`recording_loss`）、
+服务端（自造的 `replay_recording_loss`）与 pi（`no_recording` / `model_output_truncated`）
+各有一套写法，调用方无法稳定判定，控制台也只能原样打印。
+
+现在成因是一个**闭集**（`InconclusiveCode`），码与说明分离（`code` + `detail`），
+Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用被拦截与录制不完整是两种完全
+不同的情况：前者说明「这次执行没有真实发生」（去看副作用策略），后者说明「拿不到可信结论」
+（去看录制质量）。把两者合并成同一个 inconclusive，等于让用户猜该看哪一边。
 
 **D11 为什么 Diff 不看 `effect_source`**
 
@@ -224,7 +239,11 @@ POST /v1/cases/{id}/run
 | --- | --- | --- |
 | `runs` | `id`, `agent_name`, `status`, `parent_run_id`, `replay_from_seq`, `effect_policy`, `summary`, `event_count` | `parent_run_id` 建索引，便于查血缘 |
 | `events` | `id`, `run_id`, `seq`, `type`, `name`, `input`, `output`, `error`, `tokens`, `side_effect`, `effect_source` | **唯一约束 `(run_id, seq)`**，这是幂等性的物理保证 |
-| `cases` | `id`, `source_run_id`, `from_seq`, `assertions`, `effect_policy`, `last_status`, `last_results` | `source_run_id` 建索引 |
+| `cases` | `id`, `source_run_id`, `from_seq`, `assertions`, `effect_policy`, `last_status`, `last_results`, `last_cause` | `source_run_id` 建索引 |
+
+`cases.last_cause` 存最近一次结论的结构化成因（`{code, detail}`）：只有结论没有成因，用户无从知道该去
+看录制质量还是副作用策略。新增可空列的补齐由 `db._add_missing_columns` 在启动时做（可重入，SQLite 单文件），
+因此已有库不需要重建。
 
 **事件表是 append-only 的**：代码里只有插入与存在性检查，没有任何更新路径。
 这是"回放可信"的前提：如果历史事件可以被改写，复现就失去意义。

@@ -68,6 +68,7 @@ npm run audit -- --dir artifacts/validation
 - 模型看到显式 Prompt 和相对路径。物理临时目录不注入 Prompt，避免不同临时路径形成假分叉。
 - 复现重新驱动 pi 循环，用完整原生响应恢复模型与工具结果，检查输入和完整轨迹，不需要原工作树或真实模型凭据。不是 token 流逐帧复现。
 - 回归只真实调用模型，按工具名称、参数及调用次序消费旧结果。缺失结果立即停止，返回 `inconclusive`，绝不尝试真实工具回退。
+- `inconclusive` 带结构化成因 `cause = {code, detail}`：`code` 与 Python 侧 `InconclusiveCode`、控制台码表是同一个闭集（清单见 [回放语义](../../docs/replay-semantics.md) 第 8 节），`detail` 是给人看的说明。CLI 的最后一行 JSON 同时给 `cause` 与可读的 `reason`；历史包里的自由文本 `reason` 由 `reasonOf` 兼容解析，认不出的取值落到 `unknown` 并保留原文。
 - 默认上限：20 次模型调用、60 次工具调用、10 分钟。可通过 `--max-models / --max-tools / --timeout-ms` 显式调整，SIGINT 取消。
 - 所有回放包落盘前脱敏；回放数据发生脱敏时包标记不完整，禁止可信回放。规则无法识别所有企业自定义秘密格式。
 - Python 服务端只负责展示、Diff 和入库；pi 用例在本地执行，控制台显示命令入口，不支持单步回放。

@@ -39,7 +39,7 @@ test('real pi SDK records read, reproduces without checkout or provider, and sto
     await run({bundle:regress,parent:b,stream:()=>response([{type:'toolCall',id:'new',name:'read',arguments:{path:'other.txt'}}],'toolUse')});
     assert.equal(regress.complete,false);
     assert.equal(regress.verdict,'inconclusive');
-    assert.match(regress.reason!,/no_recording/);
+    assert.equal(regress.cause?.code,'missing_recorded_response');
     assert.equal(evaluate(regress,[{type:'final_output_not_contains',value:'unrelated'}]).verdict,'inconclusive');
     const file=path.join(root,'bundle.json');await save(file,b);assert.equal((await load(file)).id,b.id);
     const protocol=payload(replay);assert.equal(protocol.protocol_version,1);assert.equal(protocol.events.length,5);
@@ -144,7 +144,7 @@ test('snapshot tool source lets a changed prompt explore the pinned checkout',as
     const strict=fresh(parent.task,parent.prompt,'test','test','abc');strict.mode='regress';strict.parent=parent.id;
     await run({bundle:strict,parent,stream:()=>response([{type:'toolCall',id:'c2',name:'read',arguments:{path:'b.txt'}}],'toolUse')});
     assert.equal(strict.verdict,'inconclusive');
-    assert.match(strict.reason!,/no_recording/);
+    assert.equal(strict.cause?.code,'missing_recorded_response');
     const snapshotRun=fresh(parent.task,'Read b.txt instead.','test','test','abc');snapshotRun.mode='regress';snapshotRun.parent=parent.id;
     snapshotRun.toolSource='snapshot';
     await run({bundle:snapshotRun,parent,root,toolSource:'snapshot',stream:()=> ++call<=3
@@ -182,7 +182,7 @@ test('audit separates a right answer wrapped in prose from a wrong answer',()=>{
 test('model budget, truncation and early replay termination are diagnostic',async()=>{
   const b=fresh('t','p','t','t','c');b.mode='regress';
   await run({bundle:b,stream:()=>response([{type:'text',text:'cut'}],'length')});
-  assert.equal(b.verdict,'inconclusive');assert.equal(b.reason,'model_output_truncated');
+  assert.equal(b.verdict,'inconclusive');assert.equal(b.cause?.code,'truncated_context');
   const parent=fresh('t','p','t','t','c');parent.steps=[{kind:'tool_call',name:'read',input:{path:'x'},output:{},duration_ms:0}];
   const bad=clone(parent);bad.steps=[];bad.mode='reproduce';
   await run({bundle:bad,parent});assert.equal(bad.verdict,'inconclusive');

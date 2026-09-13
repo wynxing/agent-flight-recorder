@@ -49,6 +49,7 @@ from .schemas import (
     RunListItem,
     TimelineResponse,
     case_to_item,
+    replay_meta_to_dict,
 )
 from .seed import seed_if_empty
 from .storage import (
@@ -211,7 +212,7 @@ def read_run(run_id: str) -> RunDetailResponse:
             event_count=row.event_count,
             parent=run_to_record(parent_row) if parent_row else None,
             children=[run_to_record(child) for child in children],
-            replay=(row.meta or {}).get("afr_replay"),
+            replay=replay_meta_to_dict((row.meta or {}).get("afr_replay")),
             case=(row.meta or {}).get("afr_case"),
             agent_registered=registered,
         )

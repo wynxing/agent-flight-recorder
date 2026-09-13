@@ -217,9 +217,16 @@ uv run python -m sre_agent.run --model gpt-5-mini --prompt grounded
 评测结论区分 `passed / failed / inconclusive / error`。缺失录制、脱敏或不支持的上下文会阻止可信判断，不应当作断言失败，更不能判通过。行为首次分叉仅表示变化，不自动证明错误或根因。
 一条用例包含：源运行、回放起点、模式、断言集，以及条件标签（模型、Prompt 版本）。
 
-回放拿不到可信结论时不会静默合成：`ReplayResult` 带 `complete` 与 `reason`，
-`ReplayExhaustedError` 是公开的失败语义（见 [回放语义](docs/replay-semantics.md) 第 1 节）。
-录制边界缺失、`seq` 缺口、脱敏、录制丢失、上下文截断与初始状态未恢复都会走到这条路径。
+回放拿不到可信结论时不会静默合成：`ReplayResult` 带 `complete` 与结构化成因 `reason`（`code` + `detail`），
+`ReplayExhaustedError` 是公开的失败语义（见 [回放语义](docs/replay-semantics.md) 第 1、8 节）。
+录制边界缺失、`seq` 缺口、脱敏、录制丢失、上下文截断与初始状态未恢复都会走到这条路径，
+各自给出不同的成因码。
+
+「为什么无法判断」是一等判定：成因是一个**跨语言共享的闭集**（Python `InconclusiveCode` 与 pi 的
+TypeScript 联合类型取值逐字一致），码与说明分离，服务端复用同一份分类，控制台按成因给出中文、
+可操作的说明。**副作用被闸门拦截**与**录制不完整**是两种不同的 inconclusive，码不同、下一步也不同：
+前者说明这次执行本来就没有真实发生，后者说明拿不到可信结论。历史数据里的自由文本 `reason` 会被兼容解析，
+认不出的取值落到「未知成因」并保留原文。
 
 支持的断言类型：`no_error`、`final_output_contains`、`final_output_not_contains`、`final_output_matches`、
 `tool_called`（可带参数匹配）、`tool_not_called`、`tool_sequence_equals`、`max_tool_calls`。

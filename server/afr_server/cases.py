@@ -12,8 +12,20 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agent_flight_recorder.models import EffectPolicy, ReplayPreset, new_id, utcnow
+from agent_flight_recorder.models import (
+    ATTR_GATE,
+    EffectPolicy,
+    EffectSource,
+    ReplayPreset,
+    new_id,
+    utcnow,
+)
 from agent_flight_recorder.replay.engine import ReplayPlan
+from agent_flight_recorder.replay.reasons import (
+    InconclusiveCode,
+    InconclusiveReason,
+    most_significant,
+)
 
 from .assertions import AssertionSpec, evaluate_assertions
 from .db import session_scope
@@ -194,6 +206,7 @@ def _job(
                     "detail": f"{type(exc).__name__}: {exc}",
                 }
             ],
+            InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value, f"{type(exc).__name__}: {exc}"),
         )
 
 
@@ -205,8 +218,38 @@ def _execute(plan, run_id: str, case_id: str, snapshot: dict[str, Any]) -> None:
 
     results = evaluate_assertions(snapshot["assertions"], events, final_output_of(events))
     passed = bool(results) and all(item.passed for item in results) and result.status == "succeeded"
-    incomplete = not result.complete or any(e.effect_source == "blocked" for e in events)
-    verdict = "inconclusive" if incomplete else (
+
+    # 两种「无法判断」成因完全不同，必须分开：
+    #   * 录制不完整 —— 拿不到可信结论，要去看录制质量；
+    #   * 副作用被拦截 —— 这次执行本来就没有真实发生，要去看副作用策略。
+    # 以前两者被合并成同一个 inconclusive，控制台无从区分，用户也不知道该看哪一边。
+    # 「这次执行没有真实发生」的信号有两个来源，都要认：
+    #   * 闸门把写操作/对外动作降级成了 dry_run，并留下 side_effect_gate 标记；
+    #   * 策略直接拒绝执行，事件来源被标成 blocked。
+    # 用户显式选择的 dry_run 不带闸门标记，因此不会被误算成「被拦截」。
+    intercepted = [
+        event
+        for event in events
+        if event.effect_source is EffectSource.BLOCKED
+        or (
+            event.effect_source is EffectSource.DRY_RUN
+            and (event.attributes or {}).get(ATTR_GATE) == ATTR_GATE
+        )
+    ]
+    causes: list[InconclusiveReason] = []
+    if not result.complete:
+        causes.append(result.reason or InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value))
+    if intercepted:
+        causes.append(
+            InconclusiveReason.from_code(
+                InconclusiveCode.SIDE_EFFECT_BLOCKED.value,
+                "副作用被闸门拦截，这次执行没有真实发生："
+                + ", ".join(sorted({event.name or "未命名工具" for event in intercepted})),
+            )
+        )
+
+    cause = most_significant(causes)
+    verdict = "inconclusive" if cause is not None else (
         "error" if result.status != "succeeded" else ("passed" if passed else "failed")
     )
     _store(
@@ -214,6 +257,7 @@ def _execute(plan, run_id: str, case_id: str, snapshot: dict[str, Any]) -> None:
         run_id,
         verdict,
         [item.model_dump(mode="json") for item in results],
+        cause,
     )
 
 
@@ -247,7 +291,13 @@ def _policy(value: Any) -> EffectPolicy | None:
     return EffectPolicy.model_validate(value) if value else None
 
 
-def _store(case_id: str, run_id: str, status: str, results: list[dict[str, Any]]) -> None:
+def _store(
+    case_id: str,
+    run_id: str,
+    status: str,
+    results: list[dict[str, Any]],
+    cause: InconclusiveReason | None = None,
+) -> None:
     try:
         with session_scope() as session:
             row = get_case(session, case_id)
@@ -257,6 +307,8 @@ def _store(case_id: str, run_id: str, status: str, results: list[dict[str, Any]]
             row.last_run_id = run_id
             row.last_run_at = utcnow()
             row.last_results = results
+            # 结论与成因一起落库：不能只有结论、没有成因。
+            row.last_cause = cause.model_dump(mode="json") if cause else None
             session.add(row)
     except Exception as exc:  # noqa: BLE001
         logger.warning("failed to persist case result: %s", exc)

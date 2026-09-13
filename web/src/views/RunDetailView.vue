@@ -6,10 +6,11 @@ import { api, streamRun } from '@/api/client'
 import type { AgentEvent, EffectMode, ReplayPreset, RunDetailResponse } from '@/api/types'
 import { useSessionStore } from '@/stores/session'
 import MetricStrip from '@/components/MetricStrip.vue'
+import CausePanel from '@/components/CausePanel.vue'
 import StatePanel from '@/components/StatePanel.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import StepRow from '@/components/StepRow.vue'
-import { formatTime, shortId, textOf } from '@/utils/format'
+import { causeOf, formatTime, shortId, textOf } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -54,6 +55,13 @@ const snapshotCount = computed(() => events.value.filter((event) => event.type =
 
 const agentInfo = computed(() => session.agents.find((item) => item.name === detail.value?.run.agent_name))
 const isPi = computed(() => detail.value?.run.metadata.runtime === 'pi')
+
+// 成因只在这里解析一次：渲染交给 CausePanel，两个页面因此不会各说各话。
+const replayCause = computed(() =>
+  detail.value?.replay?.complete === false
+    ? causeOf(detail.value.replay.cause ?? detail.value.replay.reason)
+    : null,
+)
 
 const promptPresets = computed(() => agentInfo.value?.prompt_presets ?? {})
 
@@ -277,9 +285,9 @@ onUnmounted(() => {
       </section>
 
       <aside class="side">
-        <section v-if="detail.replay?.complete === false" class="panel">
+        <section v-if="replayCause" class="panel">
           <h2>无法判断</h2>
-          <p class="warn-note">录制或执行上下文不完整：{{ detail.replay.reason }}</p>
+          <CausePanel :cause="replayCause" />
         </section>
         <section v-if="isPi" class="panel">
           <h2>本地 pi 回放</h2>

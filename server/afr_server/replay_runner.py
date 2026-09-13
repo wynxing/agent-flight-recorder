@@ -21,7 +21,9 @@ from agent_flight_recorder.models import (
 )
 from agent_flight_recorder.recorder import Recorder
 from agent_flight_recorder.replay.engine import ReplayPlan, ReplaySession
+from agent_flight_recorder.replay.engine import ReplayExhaustedError, ensure_replay_context
 from agent_flight_recorder.replay.langgraph_adapter import apply_plan_to_recorder, run_replay
+from agent_flight_recorder.replay.reasons import InconclusiveCode, InconclusiveReason
 
 from .agents import resolve_agent_spec
 from .db import session_scope
@@ -67,9 +69,38 @@ def submit_replay(plan: ReplayPlan, *, run_id: str | None = None) -> str:
     """提交一次回放，立即返回新的 run_id。真正的执行在后台线程。"""
 
     replay_run_id = run_id or new_id()
-    prepare_run(plan, replay_run_id)
+    # 提交时就先做一次录制质量预检：能立刻确定的成因（例如录制本身不足以支撑回放）
+    # 要在回放 Run 出现的那一刻就写在它身上，否则用户会先看到一段没有成因的等待期。
+    prepare_run(plan, replay_run_id, cause=preflight_cause(plan))
     _executor.submit(_run_job, plan, replay_run_id)
     return replay_run_id
+
+
+def preflight_cause(plan: ReplayPlan) -> InconclusiveReason | None:
+    """不产生任何副作用的录制质量预检，返回成因或 None。
+
+    与真正的执行共用同一条判定路径（``ReplaySession.validate_recording`` 与
+    ``ensure_replay_context``），因此预检不会与执行结果说两套话。
+    """
+
+    try:
+        with session_scope() as session:
+            parent_row = get_run(session, plan.parent_run_id)
+            if parent_row is None:
+                return None
+            parent_run: RunRecord = run_to_record(parent_row)
+            parent_events = get_events(session, plan.parent_run_id)
+
+        session = ReplaySession(plan, parent_run, parent_events)
+        session.validate_recording()
+        ensure_replay_context(
+            initial_state=None,
+            parent_metadata=parent_run.metadata,
+            initial_input=session.initial_input,
+        )
+    except ReplayExhaustedError as exc:
+        return exc.cause
+    return None
 
 
 def prepare_run(
@@ -78,6 +109,7 @@ def prepare_run(
     *,
     labels: dict[str, str] | None = None,
     case: dict[str, Any] | None = None,
+    cause: InconclusiveReason | None = None,
 ) -> None:
     """在后台执行之前就把 Run 行建好。
 
@@ -96,8 +128,17 @@ def prepare_run(
                 "from_seq": plan.from_seq,
                 "policy": plan.policy.model_dump(mode="json"),
                 "pending": True,
+                "complete": True,
+                "reason": None,
+                "cause": None,
             }
         }
+        if cause is not None:
+            # 并列成因在提交时就已经定了（例如录制本身不足以支撑回放）：
+            # 控制台不该在等待期间看到「没有成因」。
+            meta["afr_replay"].update(
+                complete=False, reason=cause.model_dump(mode="json"), cause=cause.model_dump(mode="json")
+            )
         if case is not None:
             meta["afr_case"] = case
 
@@ -171,8 +212,14 @@ def execute_replay(plan: ReplayPlan, replay_run_id: str):
         recorder.close()
 
     if recorder.stats.events_dropped or recorder.stats.batches_failed:
+        # 就近构造成因：以前这里自造了 ``replay_recording_loss``，与 SDK 的
+        # ``recording_loss`` 是同一件事的第三个名字。现在用共享分类。
         result.complete = False
-        result.reason = "replay_recording_loss"
+        result.reason = InconclusiveReason.from_code(
+            InconclusiveCode.RECORDING_LOSS.value,
+            f"服务端记录器丢事件（dropped={recorder.stats.events_dropped}, "
+            f"batches_failed={recorder.stats.batches_failed}）",
+        )
 
     with session_scope() as db:
         update_run_metadata(
@@ -187,7 +234,9 @@ def execute_replay(plan: ReplayPlan, replay_run_id: str):
                     "forks": [fork.model_dump(mode="json") for fork in result.forks],
                     "verdict": result.status,
                     "complete": result.complete,
-                    "reason": result.reason,
+                    # 新增结构化成因；旧字段保持可读（结构与文本形态都能被解析回成因）。
+                    "reason": result.reason.model_dump(mode="json") if result.reason else None,
+                    "cause": result.reason.model_dump(mode="json") if result.reason else None,
                 }
             },
         )

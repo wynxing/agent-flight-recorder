@@ -102,13 +102,25 @@ export interface RunListResponse {
 
 export interface ReplayMeta {
   complete?: boolean
-  reason?: string
+  /** 结构化成因；服务端已把历史自由文本 reason 归一化到这里。 */
+  cause?: InconclusiveCause | null
+  /** 旧字段：历史数据里可能是自由字符串，也可能是与 cause 相同的结构。 */
+  reason?: string | InconclusiveCause | null
   parent_run_id?: string
   from_seq?: number
   policy?: EffectPolicy
   first_fork?: Fork | null
   forks?: Fork[]
   verdict?: string
+}
+
+/**
+ * 「无法判断」的结构化成因：稳定码 + 给人看的说明。
+ * 取值集合与 SDK / pi 的 InconclusiveCode 一致（见 docs/replay-semantics.md 第 8 节）。
+ */
+export interface InconclusiveCause {
+  code: string
+  detail: string
 }
 
 export interface RunDetailResponse {
@@ -205,6 +217,8 @@ export interface CaseItem {
   last_run_id?: string | null
   last_run_at?: string | null
   last_results: AssertionResult[]
+  /** 最近一次结论的成因；结论不是 inconclusive 时为 null。 */
+  last_cause?: InconclusiveCause | null
   created_at?: string | null
   source_run?: RunRecord | null
 }

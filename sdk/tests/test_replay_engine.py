@@ -24,6 +24,12 @@ from agent_flight_recorder.replay.engine import (
     ensure_replay_context,
 )
 from agent_flight_recorder.replay.fork import ForkKind, behavioral_steps, classify_step, detect_fork
+from agent_flight_recorder.replay.reasons import (
+    CAUSE_CODES,
+    InconclusiveCode,
+    InconclusiveReason,
+    most_significant,
+)
 
 
 def make_event(seq: int, event_type: EventType, **kwargs) -> Event:
@@ -79,7 +85,8 @@ def expect_exhausted(session: ReplaySession, fragment: str) -> None:
     try:
         session.validate_recording()
     except ReplayExhaustedError as exc:
-        assert fragment in str(exc), str(exc)
+        # 判定走结构化的码，不再靠子串匹配散文。
+        assert exc.cause.code == fragment, exc.cause
     else:
         raise AssertionError(f"应当以 {fragment} 拒绝这次回放，而不是继续跑")
 
@@ -284,7 +291,7 @@ def test_event_sequence_gap_is_rejected() -> None:
     events = [event for event in parent_events() if event.seq != 4]
     expect_exhausted(
         ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), events),
-        "incomplete_recording",
+        "event_sequence_gap",
     )
 
 
@@ -324,7 +331,7 @@ def test_truncated_model_input_is_rejected() -> None:
     events[2].input = {"messages": [{"role": "human", "content": "only one"}], "message_count": 30}
     expect_exhausted(
         ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), events),
-        "unsupported_context",
+        "truncated_context",
     )
 
 
@@ -332,11 +339,11 @@ def test_exhausted_recording_stops_later_steps() -> None:
     """验证过的失败必须真的拦住后续步骤，而不是只在开头记一笔。"""
 
     session = ReplaySession(ReplayPlan.reproduce("parent", 1), parent_run(), parent_events())
-    session.incomplete_reason = "recording_loss"
+    session.incomplete_reason = InconclusiveReason.from_code("recording_loss")
     try:
         session.next_step(EventType.MODEL_CALL.value)
     except ReplayExhaustedError as exc:
-        assert "recording_loss" in str(exc)
+        assert exc.cause.code == "recording_loss"
     else:
         raise AssertionError("盘面已经判为不完整，就不该继续解析步骤")
 
@@ -351,7 +358,7 @@ def test_initial_state_is_required_when_the_parent_recorded_one() -> None:
             initial_input={"alert": "checkout-api p99"},
         )
     except ReplayExhaustedError as exc:
-        assert "unsupported_context" in str(exc)
+        assert exc.cause.code == "missing_initial_state"
     else:
         raise AssertionError("缺少 initial_state 时不该继续复现")
 

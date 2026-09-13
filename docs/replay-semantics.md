@@ -137,3 +137,82 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 
 时间线必须把 `recorded` / `dry_run` / `blocked` 与 `live` 明确区分显示。一次回放里有多少步是真的跑过的，不能被视觉掩盖。
 
+## 8. 「无法判断」的成因分类
+
+`inconclusive` 不是终点，而是一组**可判定的成因**之一。本平台把「为什么无法判断」
+升级为一等判定：有结构化、跨语言共享的分类，服务端与 pi 一致，控制台按成因给出可操作的说明。
+
+### 8.1 码与说明分离
+
+成因的载体恒为两个字段，职责不可互换：
+
+| 字段 | 作用 | 示例 |
+| --- | --- | --- |
+| `code` | 稳定、可判定的机器取值（下面闭集之一） | `recording_loss` |
+| `detail` | 给人看的具体信息（哪个工具、哪一步、缺了什么） | `服务端记录器丢事件（dropped=3）` |
+
+历史上 `reason` 是自由字符串，同时承载「码」与「散文」（例如 `incomplete_recording: missing boundary or event sequence gap`），
+调用方无法稳定判定。现在这类字符串只在兼容解析时出现，且会被拆回 `code` + `detail`：
+**散文不得再充当码**。
+
+### 8.2 分类是闭集
+
+集合之外的取值一律落到 `unknown`，并**原样保留原文**在 `detail`，绝不被当成某个已知成因。
+控制台对未知取值也只说「未知成因」，不会猜到某个具体的下一步。
+
+### 8.3 副作用被拦 ≠ 录制不完整
+
+这是本轮最重要的一条语义修正。两种情况的**成因完全不同**：
+
+| 情况 | 含义 | 用户该看什么 |
+| --- | --- | --- |
+| 录制不完整 | 拿不到可信结论 | 录制质量（要不要重录） |
+| 副作用被拦截 | 这次执行本来就没有真实发生 | 副作用策略（要不要显式放行） |
+
+用例判定不再把两者合并成同一个 inconclusive：前者给录制层面的码，后者给 `side_effect_blocked`。
+「副作用被拦住」是安全策略正常生效的结果，不是「结论不通过」，也不该与 failed 共用一个图标。
+
+### 8.4 跨语言对齐清单
+
+三处定义必须是同一个闭集，取值逐字一致：
+
+| 语言 / 层 | 位置 | 形态 |
+| --- | --- | --- |
+| Python（SDK） | `sdk/agent_flight_recorder/replay/reasons.py` | `InconclusiveCode`（`StrEnum`）+ `InconclusiveReason` |
+| TypeScript（pi） | `integrations/pi/src/reasons.ts` | `InconclusiveCode` 联合类型 + `reasonOf` / `legacyReason` |
+| TypeScript（控制台） | `web/src/utils/format.ts` | `INCONCLUSIVE_CODES` + `CAUSE_INFO`（中文说明与下一步） |
+
+服务端不重复定义分类，而是复用 SDK 的；`server/tests/test_reason_contract.py` 从上面三处
+**读取真实定义**并断言集合逐字相同，因此「每层各自加一个枚举、然后互相不完全一致」会在测试里失败。
+
+| 成因码 | 产生它的位置 | 含义 | 控制台给出的下一步 |
+| --- | --- | --- | --- |
+| `incomplete_recording` | SDK `validate_recording`；pi `load` | 缺少 run_started / run_finished 边界 | 建议重新录制这次运行 |
+| `event_sequence_gap` | SDK `validate_recording`；pi `Tape.finish` | 事件 seq 不连续（丢过事件） | 建议重新录制这次运行 |
+| `redacted_replay_data` | SDK `validate_recording`；pi `save` | 证据已脱敏，不再逐字可比 | 用未命中脱敏规则的录制重跑 |
+| `recording_loss` | SDK `validate_recording`；服务端记录器丢事件 | 录制方/记录器丢过事件 | 建议重新录制这次运行 |
+| `truncated_context` | SDK `validate_recording`；pi 长度截断 | 模型输入的消息没有完整保存 | 提高录制上限后重新录制 |
+| `missing_recorded_response` | SDK 适配层工具分支、`recorded_model_response`；pi `Tape.take` | 父 Run 没有这一步的录制结果 | 改用回归模式让工具真实执行 |
+| `missing_initial_state` | SDK `ensure_replay_context` | 父 Run 记了 input，但状态没恢复也没声明 task_only | 提供状态或显式声明只跑 task |
+| `model_context_changed` | pi 复现路径 | 模型上下文与录制不一致 | 确认模型 / Prompt 是否被改动 |
+| `final_output_changed` | pi 复现路径 | 复现结论与录制不同 | 看运行对比定位第一个分叉点 |
+| `side_effect_blocked` | 用例判定（`server/afr_server/cases.py`） | 副作用被闸门拦截，本次执行没有真实发生 | 确认安全后可显式允许真实执行 |
+| `unknown` | 兼容解析兜底 | 集合之外的取值 | 按保留的原始说明排查，并在上游补齐分类 |
+
+每个码都有一条**真实产生它的路径**与对应测试（见 `sdk/tests/test_replay_reasons.py`、
+`server/tests/test_cases.py`、`server/tests/test_replay_reason_api.py`、
+`examples/langgraph_sre_agent/tests/test_inconclusive_reasons.py`）：不是只声明类型。
+
+### 8.5 历史数据的兼容路径
+
+历史数据里已有的自由文本 `reason` 不得导致崩溃或错误分类。解析规则固定为：
+
+1. 整体就是闭集里的码 -> 直接取码；
+2. `码: 说明` -> 拆成 `code` + `detail`；
+3. 已知的旧别名 -> 收敛到共享分类的同一个码（例如服务端旧值 `replay_recording_loss` -> `recording_loss`）；
+4. 前缀有歧义时以更具体的后半句为准（`unsupported_context: truncated messages` -> `truncated_context`）；
+5. 其余 -> `unknown` + 原文。
+
+服务端在读取时**只归一化一次**：`metadata.afr_replay.cause` 与用例的 `last_cause` 恒为
+`{code, detail}`，控制台因此不需要自己再写一份解析，也就不会出现第三个码表。
+

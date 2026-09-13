@@ -39,7 +39,32 @@ def get_engine() -> Engine:
 def init_db() -> None:
     from . import tables  # noqa: F401 - 触发模型注册
 
-    SQLModel.metadata.create_all(get_engine())
+    engine = get_engine()
+    SQLModel.metadata.create_all(engine)
+    _add_missing_columns(engine)
+
+
+#: 新增可空列。仓库刻意不引入迁移框架（SQLite 单文件、本地单用户），
+#: 因此这里只做最小、可重入的补齐：create_all 不会给已存在的表加列。
+_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
+    "cases": {"last_cause": "JSON"},
+}
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        for table, columns in _ADDITIVE_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for name, ddl_type in columns.items():
+                if name in present:
+                    continue
+                connection.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {ddl_type}'))
 
 
 @contextmanager

@@ -52,6 +52,7 @@ from .engine import (
     ensure_replay_context,
     plan_summary,
 )
+from .reasons import InconclusiveCode, InconclusiveReason
 
 MAX_MESSAGES = 80
 NEWLINE = chr(10)
@@ -225,7 +226,7 @@ class ReplayMiddleware(AgentMiddleware):
         if plan.mode is EffectMode.RECORDED:
             recorded = self.session.recorded_tool_result(name, args, parent_seq=plan.parent_seq)
             if recorded is None:
-                self.session.incomplete_reason = self._no_recording_text(name, args)
+                self.session.incomplete_reason = self._no_recording_cause(name, args)
                 raise ReplayExhaustedError(self.session.incomplete_reason)
             message = to_tool_message(recorded, tool_call.get("id"))
             event = self.recorder.record(
@@ -383,11 +384,20 @@ class ReplayMiddleware(AgentMiddleware):
         body = f"本应执行的操作参数: {json.dumps(args, ensure_ascii=False, default=str)}"
         return head + NEWLINE + body
 
-    def _no_recording_text(self, name: str, args: Any) -> str:
-        head = f"[afr] 父 Run 中没有与本次调用匹配的 {name} 录制结果，回放已偏离原始轨迹。"
-        body = f"本次调用参数: {json.dumps(args, ensure_ascii=False, default=str)}"
-        tail = "如需继续，请改用回归模式让工具真实执行，或检查 Agent 行为为何改变。"
-        return NEWLINE.join([head, body, tail])
+    def _no_recording_cause(self, name: str, args: Any) -> InconclusiveReason:
+        """缺少录制结果时的成因：码是稳定的，散文只进 detail。
+
+        以前这里返回的是整句自然语言并被直接塞进 ``reason``，调用方因此无法判定。
+        """
+
+        detail = NEWLINE.join(
+            [
+                f"工具 {name} 的这次调用在父 Run 里没有匹配的录制结果，回放已偏离原始轨迹。",
+                f"本次调用参数: {json.dumps(args, ensure_ascii=False, default=str)}",
+                "如需继续，请改用回归模式让工具真实执行，或检查 Agent 行为为何改变。",
+            ]
+        )
+        return InconclusiveReason.from_code(InconclusiveCode.MISSING_RECORDED_RESPONSE.value, detail)
 
 
 # ---------------------------------------------------------------- Agent 驱动
@@ -456,10 +466,16 @@ def run_replay(
         if session.incomplete_reason:
             raise ReplayExhaustedError(session.incomplete_reason)
     except ReplayExhaustedError as exc:
+        # 成因已经从异常上带出来了：这里不再重新拼字符串，也不再另起一个名字。
         recorder.record_error(exc, reason="replay_exhausted")
         recorder.finish(status=RunStatus.FAILED)
-        return session.to_result(run_id=recorder.run_id, status=RunStatus.FAILED.value,
-                                 error=str(exc), complete=False, reason=str(exc))
+        return session.to_result(
+            run_id=recorder.run_id,
+            status=RunStatus.FAILED.value,
+            error=str(exc),
+            complete=False,
+            cause=exc.cause,
+        )
     except Exception as exc:  # noqa: BLE001 - 回放失败必须产出可诊断的结果
         recorder.record_error(exc)
         recorder.finish(status=RunStatus.FAILED)

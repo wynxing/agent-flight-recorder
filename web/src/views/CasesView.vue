@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { PhCheckCircle, PhPlay, PhXCircle } from '@phosphor-icons/vue'
+import { PhCheckCircle, PhPlay, PhQuestion, PhXCircle } from '@phosphor-icons/vue'
 import { api } from '@/api/client'
 import type { CaseItem } from '@/api/types'
+import CausePanel from '@/components/CausePanel.vue'
 import StatePanel from '@/components/StatePanel.vue'
 import { useSessionStore } from '@/stores/session'
-import { ASSERTION_LABELS, relativeTime, shortId } from '@/utils/format'
+import { ASSERTION_LABELS, causeOf, relativeTime, shortId } from '@/utils/format'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -90,6 +91,24 @@ function isHighlighted(caseId: string) {
   return route.query.highlight === caseId
 }
 
+// 「拿不到结论」与「结论是不通过」是两件事，不能共用一个叉。
+// 前者用问号 + 琥珀色，后者才是表示失败的叉。
+const STATUS_ICONS: Record<string, unknown> = {
+  passed: PhCheckCircle,
+  running: PhPlay,
+  inconclusive: PhQuestion,
+  failed: PhXCircle,
+  error: PhXCircle,
+}
+
+function statusIcon(status: string) {
+  return STATUS_ICONS[status] ?? PhXCircle
+}
+
+function causeOfCase(item: CaseItem) {
+  return item.last_status === 'inconclusive' ? causeOf(item.last_cause) : null
+}
+
 onMounted(async () => {
   await session.loadAgents()
   await load()
@@ -122,7 +141,7 @@ onUnmounted(stopPolling)
         <div class="title-row">
           <h2>{{ item.name }}</h2>
           <span v-if="item.last_status" class="status" :class="item.last_status">
-            <component :is="item.last_status === 'passed' ? PhCheckCircle : item.last_status === 'running' ? PhPlay : PhXCircle" :size="13" weight="bold" />
+            <component :is="statusIcon(item.last_status)" :size="13" weight="bold" />
             {{
               item.last_status === 'passed'
                 ? '通过'
@@ -146,6 +165,8 @@ onUnmounted(stopPolling)
           <span v-if="item.last_run_at">{{ relativeTime(item.last_run_at) }}执行</span>
         </p>
       </header>
+
+      <CausePanel v-if="causeOfCase(item)" :cause="causeOfCase(item)" title="无法判断" compact />
 
       <div class="body">
         <div class="assertions">
@@ -238,6 +259,10 @@ onUnmounted(stopPolling)
 }
 .status.running {
   color: var(--accent);
+}
+/* 「拿不到结论」不再是失败色：它与「未通过」是两回事，列表里必须一眼可分。 */
+.status.inconclusive {
+  color: var(--warning);
 }
 .meta {
   margin-top: 5px;
