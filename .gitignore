@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.local
+
+# Local data / runtime
+data/
+*.db
+*.db-journal
+*.sqlite3
+
+# Nested worktrees
+.worktrees/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.local
+
