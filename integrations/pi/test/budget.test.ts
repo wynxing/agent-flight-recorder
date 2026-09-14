@@ -70,6 +70,28 @@ test('a known part-sum must not stand in for an unknown total when deciding the 
   assert.equal(ledger.exceededBy(), null);
 });
 
+/**
+ * 成本未知只让**成本**这一维弃权，不是把整个判定跳过：调用次数的上限照旧生效。
+ *
+ * 第 8 轮审核建议的那一组（上限 0 + 一次无法定价的调用）在这里补齐；同时钉住它的反向误读
+ * ——把「这一维不参与判定」实现成「未知就什么都不判」，会让声明的调用次数上限在出现一次
+ * 无法定价的调用之后静默失效（一个声明了却一次都没生效的账本，这个项目已经踩过一次）。
+ */
+test('an unpriced call abstains on cost only, never on the calls ceiling', () => {
+  // 上限 0 + 一次无法定价的调用：成本维弃权，而不是「已经花到上限」。
+  const bare = new BudgetLedger({max_cost_usd: 0});
+  bare.noteModelCall(null);
+  assert.equal(bare.costUsedUsd, null);
+  assert.equal(bare.exceededBy(), null);
+  assert.deepEqual(bare.remaining(), {max_cost_usd: null, max_model_calls: null});
+
+  // 两个维度各自独立：成本未知不能让调用次数这一维跟着弃权。
+  const both = new BudgetLedger({max_cost_usd: 0.01, max_model_calls: 1});
+  both.noteModelCall(null);
+  assert.equal(both.exceededBy(), 'model_calls');
+  assert.equal(both.remaining().max_model_calls, 0);
+});
+
 test('a batch hands each cell what is left and stops starting new cells at the ceiling', () => {
   const ledger = new BudgetLedger({max_model_calls: 3});
   assert.deepEqual(beginCell(ledger), {max_cost_usd: null, max_model_calls: 3});
