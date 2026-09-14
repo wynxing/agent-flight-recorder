@@ -96,6 +96,10 @@ class CaseTable(SQLModel, table=True):
     #: 缺了它，「最近一次结论」就少一层前提：用例被改过之后，页面上那句结论看起来仍像是
     #: 在描述当前这份定义。存量行没有它，读出来就是 None——如实表示「没记录」，不回填。
     last_definition_digest: Optional[str] = None
+    #: 那次执行**显式给出的回放覆盖**（结构化；NULL = 没有覆盖）。它是「有效定义」的另一半：
+    #: 摘要说明「按什么判的」，这一列说明「与用例定义差在哪」。缺了它，一次带覆盖的执行看起来
+    #: 就与「用例定义被改过」无法区分。存量行同样如实为 NULL。
+    last_definition_overrides: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
 
 

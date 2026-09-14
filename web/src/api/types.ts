@@ -275,8 +275,22 @@ export interface CaseItem {
   /**
    * 最近一次执行**所用的那一版定义**的摘要。与 definition_digest 不同时，说明这条结论
    * 是在另一版定义下得出的；版本化之前跑出来的结论没有这个记录，为 null。
+   *
+   * 记的是**有效定义**（用例定义 ⊕ 下面那份覆盖），因此它回答的是「这次结论按什么判的」，
+   * 而不是「用例行上写的是什么」。
    */
   last_definition_digest?: string | null
+  /**
+   * 那次执行显式给出的回放覆盖。空表示**没有覆盖**；存量行同时 last_definition_digest 也为
+   * null，那才是「没有记录」。摘要与本字段一起构成完整前提。
+   */
+  last_definition_overrides?: {
+    from_seq?: number | null
+    preset?: string | null
+    policy?: Record<string, unknown> | null
+    model?: string | null
+    system_prompt?: string | null
+  } | null
   created_at?: string | null
   source_run?: RunRecord | null
 }

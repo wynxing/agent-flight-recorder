@@ -148,13 +148,24 @@ GET /v1/diff?a=&b=
 ```
 POST /v1/cases/{id}/run
   -> 读取用例快照（源运行、起点、模式、断言、条件标签）
+     -> 合并这次执行**显式给出的覆盖**（from_seq / preset / policy / model /
+        system_prompt）得到**有效定义**：只在这里合并一次
      -> 组装 ReplayPlan -> 建好回放 Run 行 -> 后台执行
         -> 回放完成后取出该 Run 的事件
            -> 逐条求值确定性断言 -> passed / failed 写回用例
+              -> 同时写下 `last_definition_digest`（**有效定义**的摘要）与
+                 `last_definition_overrides`（覆盖本身）
 ```
 
 给了新的 system prompt 却没有指定模式时，会自动按**回归模式**执行：
 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
+
+**「用了哪一版定义」必须包含覆盖。** 计划与记录都从同一次合并（`case_versions.effective_snapshot`）
+出来：只记用例行上那一份，会把一次「从第 1 步回放」的结论记成「用例定义起点那一版」，也就是
+错误归属。因此 `last_definition_digest` 记的是**有效定义** = 定义 ⊕ 覆盖，覆盖本身结构化落在
+`last_definition_overrides` 上（`null` = 没有覆盖）。没有覆盖时两份摘要相同，默认路径仍可直接与
+用例集版本里的成员摘要比对；有覆盖时必然不同，控制台据此分两支说话（不会把覆盖说成「定义被改了」）。
+预算不在其中：它约束跑多少，不改变判据（见 [上报协议](protocol.md) 第 7 节）。
 
 ### 4.5 批量套件与用例集版本
 
@@ -345,7 +356,7 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 | --- | --- | --- |
 | `runs` | `id`, `agent_name`, `status`, `parent_run_id`, `replay_from_seq`, `effect_policy`, `summary`, `event_count` | `parent_run_id` 建索引，便于查血缘 |
 | `events` | `id`, `run_id`, `seq`, `type`, `name`, `input`, `output`, `error`, `tokens`, `side_effect`, `effect_source` | **唯一约束 `(run_id, seq)`**，这是幂等性的物理保证 |
-| `cases` | `id`, `source_run_id`, `from_seq`, `assertions`, `effect_policy`, `last_status`, `last_results`, `last_cause` | `source_run_id` 建索引 |
+| `cases` | `id`, `source_run_id`, `from_seq`, `assertions`, `effect_policy`, `last_status`, `last_results`, `last_cause`, `last_definition_digest`, `last_definition_overrides` | `source_run_id` 建索引；最后两列是「最近一次结论」的前提（有效定义 + 覆盖），见第 4.4 节 |
 | `suites` | `id`, `status`, `case_ids`, `conditions`, `budget`, `budget_usage`, `case_set_version` | 生命周期由格子的状态推导，落库值只是缓存 |
 | `suite_items` | `id`, `suite_id`, `case_id`, `position`, `condition_key`, `condition`, `case_set_version`, `status` | **唯一约束 `(suite_id, case_id, condition_key)`**：一个套件里同一用例 × 同一条件只能有一格 |
 | `case_set_versions` | `id`（`cs1:<sha256>`，主键）, `canonicalization`, `case_count`, `cases` | 主键即内容摘要：**同一份定义只可能有一行**，版本可去重、可反查 |
@@ -356,8 +367,8 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 
 `case_set_versions` 只存**判据相关**的那一面（见第 4.5 节），因此「版本行的内容重算之后必须等于它的
 标识」是一条可直接断言的不变量（`test_the_stored_version_content_recomputes_to_its_id`）。
-版本化新增的三个可空列（`suites.case_set_version`、`suite_items.case_set_version`、
-`cases.last_definition_digest`）走的是同一条补列路径；存量行补出来是 NULL，读出来就是
+版本化新增的四个可空列（`suites.case_set_version`、`suite_items.case_set_version`、
+`cases.last_definition_digest`、`cases.last_definition_overrides`）走的是同一条补列路径；存量行补出来是 NULL，读出来就是
 「无版本记录」与「最近一次结论没有定义记录」——**不回填**，因为回填等于替历史批次编一个它从来没有的
 前提。新表由 `create_all` 在建库时创建，旧库直接补上即可（`server/tests/test_suite_versions.py`
 用「把库退回旧形态再跑一次启动迁移」的方式钉住了这条路径）。

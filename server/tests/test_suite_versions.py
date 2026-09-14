@@ -18,6 +18,7 @@ import json
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -86,6 +87,54 @@ def _frozen_definition(client: Any, version_id: str, case_id: str) -> dict[str, 
         if member["case_id"] == case_id:
             return member["definition"]
     raise AssertionError(f"这一版里没有这条用例：version={version_id} case={case_id}")
+
+
+def _await_case(client: Any, case_id: str, timeout: float = 30.0) -> dict[str, Any]:
+    """等单条用例的执行落地（HTTP 提交后真正的结论在后台线程里算）。"""
+
+    deadline = time.monotonic() + timeout
+    body: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        body = client.get(f"/v1/cases/{case_id}").json()
+        if body["last_status"] not in (None, "running"):
+            return body
+        time.sleep(0.05)
+    raise AssertionError(f"用例执行没有在 {timeout:.0f}s 内结束：{body}")
+
+
+def _install_plan_recorder(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """把「真的去回放」换成一次成功执行，并记下这次执行**实际用的计划**。
+
+    覆盖是不是真的生效了，唯一的现场就是计划（from_seq / 模型 / Prompt 正文 / 策略）；
+    记下它，下面的断言才不是在证明「什么都没发生」。回放之外的链路——覆盖合并、断言求值、
+    结论与前提落库——全是真代码。
+    """
+
+    from afr_server import cases as cases_module
+    from agent_flight_recorder.models import EffectPolicy
+    from agent_flight_recorder.replay.engine import ReplayResult
+
+    seen: list[dict[str, Any]] = []
+
+    def execute_replay(plan: Any, run_id: str, *, shared_ledger: Any = None) -> Any:
+        seen.append(
+            {
+                "from_seq": plan.from_seq,
+                "model": plan.overrides.model,
+                "system_prompt": plan.overrides.system_prompt,
+                "model_call_mode": plan.policy.resolve_mode(seq=plan.from_seq, kind="model_call").value,
+            }
+        )
+        return ReplayResult(
+            parent_run_id=plan.parent_run_id,
+            from_seq=plan.from_seq,
+            policy=EffectPolicy.reproduce(),
+            run_id=run_id,
+            status="succeeded",
+        )
+
+    monkeypatch.setattr(cases_module, "execute_replay", execute_replay)
+    return seen
 
 
 def _install_passing_runner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,6 +216,7 @@ def _capture_definitions(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]
         on_result: Any = None,
         condition: dict[str, Any] | None = None,
         shared_ledger: Any = None,
+        overrides: dict[str, Any] | None = None,
     ) -> None:
         seen.append(
             {
@@ -638,8 +688,273 @@ def test_an_assertion_that_cannot_be_parsed_still_gets_a_stable_digest() -> None
     assert first == member_digest(definition_of({**snapshot, "assertions": [weird, "甚至不是一个对象"]}))
 
 
-# ------------------------------------------------------------------ 存量数据
 
+
+# ------------------------------------------------------------------ 单次运行的覆盖属于「所用定义」
+
+
+def test_a_single_run_override_is_attributed_to_the_definition_it_actually_ran(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """单条运行的 from_seq 覆盖必须进「所用定义」，否则就是错误归属。
+
+    这是审核在真机上抓到的那条：用例定义在第 15 步，`POST /v1/cases/{id}/run` 带 `from_seq: 1`
+    时实际从第 1 步回放，结论却仍被记成第 15 步那一版定义。这里走**同一个 HTTP 入口**把它钉住：
+    计划里必须是 1（否则这条测试只是在证明覆盖没生效），记下的前提必须也是 1 那一版。
+    """
+
+    from afr_server.case_versions import (
+        definition_of,
+        effective_snapshot,
+        member_digest,
+        snapshot_of,
+    )
+    from afr_server.db import session_scope
+    from afr_server.storage import get_case
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "起点覆盖的用例",
+            "source_run_id": "run-1",
+            "from_seq": 15,
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+    assert created["from_seq"] == 15
+
+    seen = _install_plan_recorder(monkeypatch)
+    submitted = client.post(f"/v1/cases/{created['id']}/run", json={"from_seq": 1})
+    assert submitted.status_code == 200, submitted.text
+
+    after = _await_case(client, created["id"])
+    # 覆盖真的生效了：这一次从第 1 步跑起。
+    assert [item["from_seq"] for item in seen] == [1]
+    assert after["last_status"] == "passed"
+
+    with session_scope() as session:
+        base = snapshot_of(get_case(session, created["id"]))
+    expected = member_digest(definition_of(effective_snapshot(base, {"from_seq": 1})))
+    # 关键断言：记下来的是**有效定义**（第 1 步那一版），不是用例行上那一版（第 15 步）。
+    assert after["last_definition_digest"] == expected
+    assert after["last_definition_digest"] != after["definition_digest"]
+    assert after["definition_digest"] == member_digest(definition_of(base))
+    # 覆盖本身也记下来了：只有摘要而没有它，读者只能靠猜两个摘要为什么不同。
+    assert after["last_definition_overrides"] == {"from_seq": 1}
+
+
+def test_every_single_run_override_lands_in_the_premise(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同类入口一并核查：preset / model / system_prompt 覆盖同样进「所用定义」。
+
+    只修 from_seq 是不够的：这几个参数走的是同一条合并路径，漏掉任何一个，都会让「这条结论按
+    什么判的」少一块。这里逐项验证，并要求**计划与记录一致**（同一次运行的两个说法）。
+    """
+
+    from afr_server.case_versions import (
+        definition_of,
+        effective_snapshot,
+        member_digest,
+        snapshot_of,
+    )
+    from afr_server.db import session_scope
+    from afr_server.storage import get_case
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "覆盖各维度的用例",
+            "source_run_id": "run-1",
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+
+    seen = _install_plan_recorder(monkeypatch)
+    override = {"preset": "regress", "model": "scripted-x", "system_prompt": "PROMPT OVERRIDE"}
+    response = client.post(f"/v1/cases/{created['id']}/run", json=override)
+    assert response.status_code == 200, response.text
+
+    after = _await_case(client, created["id"])
+    # 这三项真的落到了计划上：模型与 Prompt 正文进了覆盖，preset 变成了「模型调用走 live」。
+    assert seen[0]["model"] == "scripted-x"
+    assert seen[0]["system_prompt"] == "PROMPT OVERRIDE"
+    assert seen[0]["model_call_mode"] == "live"
+
+    with session_scope() as session:
+        base = snapshot_of(get_case(session, created["id"]))
+    # 记录与计划说的是同一件事：有效定义 = 用例定义 ⊕ 这三项覆盖。
+    assert after["last_definition_digest"] == member_digest(
+        definition_of(effective_snapshot(base, override))
+    )
+    assert after["last_definition_digest"] != after["definition_digest"]
+    assert after["last_definition_overrides"] == override
+
+
+def test_a_run_without_an_override_records_no_override(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没有覆盖时两份摘要相同、覆盖为空：默认路径仍可直接与版本里的成员摘要比对。"""
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "没有覆盖的用例",
+            "source_run_id": "run-1",
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+
+    _install_plan_recorder(monkeypatch)
+    assert client.post(f"/v1/cases/{created['id']}/run", json={}).status_code == 200
+    after = _await_case(client, created["id"])
+
+    assert after["last_definition_digest"] == after["definition_digest"]
+    assert after["last_definition_overrides"] is None
+
+
+def test_budget_is_not_part_of_the_effective_definition(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """预算不进「所用定义」：它约束的是跑多少，不是判据（理由写在 protocol 第 7 节）。"""
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "带预算的用例",
+            "source_run_id": "run-1",
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+
+    _install_plan_recorder(monkeypatch)
+    response = client.post(
+        f"/v1/cases/{created['id']}/run", json={"budget": {"max_model_calls": 5}}
+    )
+    assert response.status_code == 200, response.text
+    after = _await_case(client, created["id"])
+
+    assert after["last_definition_overrides"] is None
+    assert after["last_definition_digest"] == after["definition_digest"]
+
+
+def test_an_unknown_override_key_is_rejected() -> None:
+    """写错的覆盖键当场报错，而不是留下一个「摘要变了、执行没变」的幽灵差异。"""
+
+    from afr_server.case_versions import effective_snapshot
+
+    assert effective_snapshot({"id": "c"}, {"from_seq": 2})["from_seq"] == 2
+    with pytest.raises(ValueError, match="unknown override"):
+        effective_snapshot({"id": "c"}, {"fromSeq": 2})
+
+
+
+# ------------------------------------------------------------------ 批量格子里的当列条件
+
+
+def test_a_batch_cell_records_the_condition_it_ran_under_as_an_override(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """批量格子同理：当列条件（模型 / Prompt 正文）是**这次执行的前提**，也进「所用定义」。
+
+    这一条同时钉住两件事不要互相顶替：用例集版本（标识与 drift）记的是**用例定义**；
+    用例行上的「最近一次结论」记的是**那次执行的有效定义**（含当列条件）。
+    """
+
+    from afr_server.case_versions import (
+        definition_of,
+        effective_snapshot,
+        member_digest,
+        snapshot_of,
+    )
+    from afr_server.db import session_scope
+    from afr_server.storage import get_case
+
+    # 真跑链路（含结论落库），只把「真的去回放」换掉：这样用例行的前提才是真写下来的。
+    _install_plan_recorder(monkeypatch)
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "带条件的用例",
+            "source_run_id": "run-1",
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+
+    suite = _await_suite(
+        client,
+        _submit(client, [created["id"]], [{"model": "m2"}])["suite_id"],
+    )
+    # 用例集版本仍然是**用例定义**那一版：条件不进版本（它由格子的 condition 记录）。
+    frozen = _frozen_definition(client, suite["case_set"]["id"], created["id"])
+    assert frozen["effect_policy"]["model"] is None
+    assert suite["case_set"]["drift"] == {"changed": [], "missing": [], "unchanged": 1}
+
+    after = _await_case(client, created["id"])
+    with session_scope() as session:
+        base = snapshot_of(get_case(session, created["id"]))
+    override = {"preset": "regress", "model": "m2"}
+    assert after["last_definition_overrides"] == override
+    assert after["last_definition_digest"] == member_digest(
+        definition_of(effective_snapshot(base, override))
+    )
+    assert after["last_definition_digest"] != after["definition_digest"]
+
+
+def test_a_started_run_does_not_keep_the_previous_premise(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """执行中不挂着上一轮的覆盖：它与摘要同属「整条写下去」的那条记录（protocol 第 7 节）。"""
+
+    from afr_server import background
+    from afr_server import cases as cases_module
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "换前提的用例",
+            "source_run_id": "run-1",
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+    case_id = created["id"]
+
+    _install_plan_recorder(monkeypatch)
+    assert client.post(f"/v1/cases/{case_id}/run", json={"from_seq": 1}).status_code == 200
+    assert _await_case(client, case_id)["last_definition_overrides"] == {"from_seq": 1}
+
+    # 第二次执行：卡在执行中，好观察「已开始、还没出结论」的那个窗口。
+    stalling = threading.Event()
+    entered = threading.Event()
+
+    def stall(*args: Any, **kwargs: Any) -> None:
+        entered.set()
+        stalling.wait(timeout=30)
+
+    monkeypatch.setattr(cases_module, "_execute", stall)
+    # 这个 worker 会写库，换库之前必须能被 drain 等到（按 afr- 前缀起名，见 conftest 的诊断网）。
+    worker = background.start(
+        "afr-test-version-stall-worker", lambda: cases_module.run_case_blocking(case_id)
+    )
+    try:
+        assert entered.wait(timeout=30), "第二次执行没有开始"
+        running = client.get(f"/v1/cases/{case_id}").json()
+        assert running["last_status"] == "running"
+        # 上一轮的覆盖不能粘到这一轮：那会变成「这次还没跑出结论，却已经带着上次的前提」。
+        assert running["last_definition_overrides"] is None
+        assert running["last_definition_digest"] is None
+    finally:
+        stalling.set()
+        worker.join(timeout=30)
+
+
+# ------------------------------------------------------------------ 存量数据
 
 def test_a_batch_from_before_versioning_reads_back_as_having_no_version(client, make_run) -> None:
     """版本化之前创建的批次照样读得出来，缺版本时如实显示「无版本记录」。"""
@@ -833,6 +1148,7 @@ def _run_console_module(payload: dict[str, Any]) -> dict[str, Any]:
     script = (
         "import { caseSetLabel, caseSetDriftNotice, definitionDriftNotice } "
         "from './web/src/utils/suite.ts';"
+        "import { describeOverrides } from './web/src/utils/suite.ts';"
         "let raw = '';"
         "process.stdin.setEncoding('utf8');"
         "process.stdin.on('data', (chunk) => { raw += chunk; });"
@@ -842,6 +1158,7 @@ def _run_console_module(payload: dict[str, Any]) -> dict[str, Any]:
         "    label: caseSetLabel(payload.caseSet),"
         "    drift: caseSetDriftNotice(payload.caseSet),"
         "    definition: definitionDriftNotice(payload.caseItem),"
+        "    overrides: describeOverrides(payload.caseItem && payload.caseItem.last_definition_overrides),"
         "  }));"
         "});"
     )
@@ -928,3 +1245,59 @@ def test_the_console_states_the_version_and_the_drift() -> None:
     )
     # 没有记录就别说话：拿「没记录」冒充「一致」是这套东西最不该犯的错。
     assert unrecorded["definition"] == ""
+
+
+def test_the_console_never_calls_an_override_a_definition_change() -> None:
+    """带覆盖的那次执行，不许被说成「当前定义已改动」。
+
+    这是审核那条 P1 的同一条道理，只是发生在措辞上：定义可能一个字都没改，差的只是这一次的
+    执行覆盖。「当前定义已改动」是一句没有记录支撑的话。
+    """
+
+    base = "cs1m:" + "11" * 32
+    other = "cs1m:" + "22" * 32
+
+    from_seq_only = _run_console_module(
+        {
+            "caseItem": {
+                "definition_digest": base,
+                "last_definition_digest": other,
+                "last_definition_overrides": {"from_seq": 1},
+            }
+        }
+    )
+    assert "从第 1 步开始" in from_seq_only["definition"]
+    assert "当前定义已改动" not in from_seq_only["definition"]
+    assert "判据不一致" in from_seq_only["definition"]
+
+    # 覆盖与用例定义是否一致由摘要说：覆盖值恰好等于定义值时，不该凭空多出一句不一致。
+    overriding_to_the_same_value = _run_console_module(
+        {
+            "caseItem": {
+                "definition_digest": base,
+                "last_definition_digest": base,
+                "last_definition_overrides": {"model": "m"},
+            }
+        }
+    )
+    assert "模型 m" in overriding_to_the_same_value["definition"]
+    assert "判据不一致" not in overriding_to_the_same_value["definition"]
+
+    # 覆盖里没有的东西不许被说出口；空字符串也是**真的覆盖了 Prompt 正文**（不是「没有覆盖」）。
+    described = _run_console_module(
+        {
+            "caseItem": {
+                "definition_digest": base,
+                "last_definition_digest": other,
+                "last_definition_overrides": {"system_prompt": "", "preset": "regress"},
+            }
+        }
+    )
+    assert described["overrides"] == "Prompt 正文、回放模式 regress"
+
+    # 没有覆盖时那句话仍然只讲「定义变了」：这一支没有被上面的改动带偏。
+    unchanged_definition = _run_console_module(
+        {"caseItem": {"definition_digest": base, "last_definition_digest": other}}
+    )
+    assert "当前定义已改动" in unchanged_definition["definition"]
+    assert not unchanged_definition["overrides"]

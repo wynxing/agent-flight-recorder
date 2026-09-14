@@ -124,7 +124,13 @@ class CaseItem(BaseModel):
     definition_digest: str = ""
     #: 最近一次执行**所用的那一版定义**的摘要。与 definition_digest 不同时，说明这条结论
     #: 是在另一版定义下得出的；存量行（版本化之前跑的）没有它，如实为 None 而不是回填一个。
+    #: 这里记的是**有效定义**：用例定义 ⊕ 那次执行显式给出的覆盖（见 case_versions.py）。
     last_definition_digest: str | None = None
+    #: 那次执行显式给出的回放覆盖（from_seq / preset / policy / model / system_prompt）。
+    #: 空表示**没有覆盖**（那一次就是按用例自己的定义跑的），因此它与 last_definition_digest
+    #: 一起才构成完整的前提：摘要说「按什么判的」，这一列说「与用例定义差在哪」。
+    #: 存量行（没有记录）与「没有覆盖」的区分靠 last_definition_digest：它为 None 就是没记录。
+    last_definition_overrides: dict[str, Any] | None = None
     created_at: datetime | None = None
     source_run: RunRecord | None = None
 
@@ -410,6 +416,12 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         definition_digest=definition_digest_of_case(row),
         # 最近一次结论是在哪一版定义下得出的。存量行没有这一列，如实是 None。
         last_definition_digest=getattr(row, "last_definition_digest", None),
+        # 那次执行显式给出的覆盖（没有覆盖、或没有记录时都是 None，两者的区分见上）。
+        last_definition_overrides=(
+            dict(row.last_definition_overrides)
+            if getattr(row, "last_definition_overrides", None)
+            else None
+        ),
         created_at=aware_utc(row.created_at),
         source_run=source_run,
     )

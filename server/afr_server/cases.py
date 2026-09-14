@@ -31,7 +31,12 @@ from agent_flight_recorder.replay.reasons import (
 from sqlmodel import col, update
 
 from .assertions import AssertionSpec, evaluate_assertions
-from .case_versions import definition_digest_of, snapshot_of
+from .case_versions import (
+    definition_digest_of,
+    effective_snapshot,
+    run_overrides,
+    snapshot_of,
+)
 from .db import bound_db_path, session_scope
 from .replay_runner import build_plan, execute_replay, prepare_run
 from .storage import final_output_of, get_case, get_events, get_run
@@ -188,7 +193,7 @@ def submit_case_run(
 ) -> str:
     """提交一次用例执行，立即返回回放 Run 的 ID。真正的执行在线程池里。"""
 
-    run_id, plan, snapshot = _prepare_case_run(
+    run_id, plan, snapshot, overrides = _prepare_case_run(
         case_id,
         from_seq=from_seq,
         preset=preset,
@@ -197,7 +202,7 @@ def submit_case_run(
         model=model,
         system_prompt=system_prompt,
     )
-    _executor.submit(_job, plan, run_id, case_id, snapshot)
+    _executor.submit(_job, plan, run_id, case_id, snapshot, overrides=overrides)
     return run_id
 
 
@@ -232,7 +237,7 @@ def run_case_blocking(
     会同时记进它。单条执行不传，账目只落在自己身上。
     """
 
-    run_id, plan, snapshot = _prepare_case_run(
+    run_id, plan, snapshot, overrides = _prepare_case_run(
         case_id,
         definition=definition,
         from_seq=from_seq,
@@ -252,6 +257,7 @@ def run_case_blocking(
         on_result=on_result,
         condition=condition,
         shared_ledger=shared_ledger,
+        overrides=overrides,
     )
     return run_id
 
@@ -266,10 +272,13 @@ def _prepare_case_run(
     budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
-) -> tuple[str, ReplayPlan, dict[str, Any]]:
+) -> tuple[str, ReplayPlan, dict[str, Any], dict[str, Any]]:
     """准备好一次用例执行：占住 Case 状态、定下回放计划、先把 Run 行建出来。
 
     definition 给了就用它（批次提交那一刻冻结的定义），没给才读用例行。
+
+    这里把**覆盖**合并一次（`effective_snapshot`），并把合并结果交给计划与记录两处：
+    「按什么跑」与「记成什么」因此不允许分家。
     """
 
     with session_scope() as session:
@@ -296,61 +305,71 @@ def _prepare_case_run(
             last_run_at=utcnow(),
             last_results=[],
             last_condition=None,
-            # 定义摘要在结论产生的那一刻才写（见 _execute）：执行中的这一行不该挂着一个
-            # 还没成立的说法。
+            # 定义摘要与覆盖都在结论产生的那一刻才写（见 _execute）：执行中的这一行不该挂着
+            # 一个还没成立的说法，也不该挂着上一轮的前提。整条落下是 docs/protocol.md 第 7 节的
+            # 承诺——按列合并会拼出「这次的 run_id + 上次的覆盖」这种自相矛盾的记录。
             last_definition_digest=None,
+            last_definition_overrides=None,
         )
 
+    # 这次执行显式给出的回放覆盖（没给的就是没给）。预算不在其中：它不改变判据。
+    overrides = run_overrides(
+        from_seq=from_seq,
+        preset=preset,
+        policy=policy,
+        model=model,
+        system_prompt=system_prompt,
+        budget=budget,
+    )
+    # 有效定义 = 用例定义 ⊕ 覆盖。**只在这里合并一次**：下面的计划与最终的 last_definition_digest
+    # 用的是同一个快照。实际从第 1 步回放却把结论记成第 15 步那一版，根子就是这两处分家。
+    effective = effective_snapshot(snapshot, overrides)
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
     # 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
     # 计划在提交前就确定，回放 Run 也因此可以立刻可见，而不是等第一批事件落库。
     plan = resolve_plan(
-        snapshot,
-        from_seq=from_seq,
-        preset=preset,
+        effective,
         policy=policy,
         # 上限只约束这一次执行。整批的上限不在这里：套件层在启动每一格之前把「整批剩余」
         # 作为这一格的额度分下来（见 suites.py），因此这里拿到的额度天然不会越过整批上限。
         budget=budget,
-        model=model,
-        system_prompt=system_prompt,
         labels={"case_id": case_id, "case_name": snapshot["name"]},
     )
     prepare_run(plan, run_id, case={"case_id": case_id, "name": snapshot["name"]})
-    return run_id, plan, snapshot
+    # 交出去的是**有效定义**：断言求值、定义摘要、覆盖记录都从它来。
+    return run_id, plan, effective, overrides
 
 
 def resolve_plan(
     snapshot: dict[str, Any],
     *,
-    from_seq: int | None = None,
-    preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
     budget: ReplayBudget | None = None,
-    model: str | None = None,
-    system_prompt: str | None = None,
     labels: dict[str, str] | None = None,
 ) -> ReplayPlan:
     """把「一次用例执行」解析成回放计划。
 
     执行与整批预估共用这一处：什么时候算回归模式只有这一份判定。两边各写一份的话，
     预估出来的调用量就会与真的跑出来的不是同一件事，而这种偏差在界面上看不出来。
+
+    **传进来的必须是有效定义**（已经合并过覆盖的快照，见 `effective_snapshot`）：覆盖不再
+    作为这里的一串参数出现，因为「合并过的快照」只有一个来源，而两串参数可以各传各的。
     """
 
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
     # 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
-    resolved_preset = preset or _preset(snapshot.get("preset"))
-    if system_prompt is not None and resolved_preset is None:
+    resolved_preset = _preset(snapshot.get("preset"))
+    if snapshot.get("system_prompt") is not None and resolved_preset is None:
         resolved_preset = ReplayPreset.REGRESS
 
     return build_plan(
         snapshot["source_run_id"],
-        from_seq=from_seq or snapshot["from_seq"] or 1,
+        from_seq=snapshot["from_seq"] or 1,
         preset=resolved_preset,
         policy=policy or _policy(snapshot.get("policy")),
         budget=budget,
-        model=model or snapshot.get("model"),
-        system_prompt=system_prompt if system_prompt is not None else snapshot.get("system_prompt"),
+        model=snapshot.get("model"),
+        system_prompt=snapshot.get("system_prompt"),
         labels=dict(labels or {}),
     )
 
@@ -364,22 +383,21 @@ def _job(
     on_result: ResultHook | None = None,
     condition: dict[str, Any] | None = None,
     shared_ledger: BudgetLedger | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> None:
     try:
-        if on_result is None and condition is None and shared_ledger is None:
-            # 单条执行路径原样调用：有些调用方（含测试替身）只按位置接收参数，
-            # 不该因为多了一个批量专用观察点而被迫改签名。
-            _execute(plan, run_id, case_id, snapshot)
-        else:
-            _execute(
-                plan,
-                run_id,
-                case_id,
-                snapshot,
-                on_result=on_result,
-                condition=condition,
-                shared_ledger=shared_ledger,
-            )
+        # 只把**真的给了**的额外参数传下去：单条执行路径（一个都没有）原样调用，
+        # 因此有些调用方（含测试替身）只按位置接收参数也不会被迫改签名。
+        extras: dict[str, Any] = {}
+        if on_result is not None:
+            extras["on_result"] = on_result
+        if condition is not None:
+            extras["condition"] = condition
+        if shared_ledger is not None:
+            extras["shared_ledger"] = shared_ledger
+        if overrides:
+            extras["overrides"] = overrides
+        _execute(plan, run_id, case_id, snapshot, **extras)
     except Exception as exc:  # noqa: BLE001 - 后台任务失败也要给出结论
         logger.warning("case run failed: %s", exc)
         results = [
@@ -398,6 +416,7 @@ def _job(
             cause,
             condition,
             definition_digest_of(snapshot),
+            overrides,
         )
         if on_result is not None:
             on_result("error", results, cause)
@@ -412,9 +431,11 @@ def _execute(
     on_result: ResultHook | None = None,
     condition: dict[str, Any] | None = None,
     shared_ledger: BudgetLedger | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> None:
-    # 这次执行用的是**哪一版定义**，与结论一起落库。用例被改过之后，用例页上那句
-    # 「最近一次结论」仍然说得清它是在哪一版定义下得出的，而不是看起来像在描述当前这份。
+    # 这次执行用的是**哪一版定义**，与结论一起落库。snapshot 在这里已经是**有效定义**
+    # （用例定义 ⊕ 这次显式给出的覆盖，见 _prepare_case_run），因此这一句记的是「按什么判的」
+    # 本身，而不是「用例行上写的是什么」。
     definition_digest = definition_digest_of(snapshot)
     # 没有整批账本时不多传参数：单条执行路径的调用方（含测试替身）签名因此一字未改。
     batch_args: dict[str, Any] = {"shared_ledger": shared_ledger} if shared_ledger is not None else {}
@@ -468,7 +489,7 @@ def _execute(
             f"回放执行本身没有成功（status={result.status}）",
         )
     payload = [item.model_dump(mode="json") for item in results]
-    _store(case_id, run_id, verdict, payload, cause, condition, definition_digest)
+    _store(case_id, run_id, verdict, payload, cause, condition, definition_digest, overrides)
     if on_result is not None:
         on_result(verdict, payload, cause)
 
@@ -494,6 +515,7 @@ def _store(
     cause: InconclusiveReason | None = None,
     condition: dict[str, Any] | None = None,
     definition_digest: str | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> None:
     try:
         with session_scope() as session:
@@ -512,8 +534,13 @@ def _store(
                 # 入口允许直接传 Prompt 正文做覆盖（不带版本名），凭空补一个条件名会把一次
                 # 真实覆盖描述成「什么都没变」，那比留空更容易误导。
                 last_condition=dict(condition) if condition else None,
-                # 这一版定义的摘要：它是「这次结论是在哪一版用例定义下得出的」那句话本身。
+                # 这一版定义的摘要（**有效定义**：用例定义盖上这次显式给出的覆盖）。
+                # 它是「这次结论是在哪一版定义下得出的」那句话本身；只记基础定义会让一次
+                # 「从第 1 步回放」的结论被记成「第 15 步那一版」，那是错误归属。
                 last_definition_digest=definition_digest,
+                # 覆盖本身（结构化；空 = 没有覆盖）。只有摘要而没有它，读者会以为摘要不同
+                # 一定是「定义被改了」——那是第二句没有证据支撑的话。
+                last_definition_overrides=dict(overrides) if overrides else None,
             )
     except Exception as exc:  # noqa: BLE001
         # 带上库名：这一句是「后台线程连到了别的库」时唯一的现场线索（engine 按当前设置

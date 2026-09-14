@@ -200,16 +200,62 @@ export function caseSetDriftNotice(caseSet: CaseSet | null | undefined): string 
 }
 
 /**
- * 用例页上「最近一次结论」的定义前提。
+ * 一次执行显式给出的回放覆盖（服务端 case_versions.run_overrides 的字段）。
+ * 结构类型，保持本文件零 import。
+ */
+export interface RunOverrides {
+  from_seq?: number | null
+  preset?: string | null
+  policy?: Record<string, unknown> | null
+  model?: string | null
+  system_prompt?: string | null
+}
+
+/**
+ * 覆盖的可读说法：只列这次**真的覆盖了**什么，不替它解释成「定义变了」。
+ *
+ * Prompt 正文只写「Prompt 正文」而不打印内容：那是整段提示词，塞进一行提示里既读不下，
+ * 也会把「这次跑的是什么」这个要点淹掉（正文本身在格子的条件里另有记录）。
+ */
+export function describeOverrides(overrides: RunOverrides | null | undefined): string {
+  if (!overrides) return ''
+  const parts: string[] = []
+  if (overrides.from_seq !== null && overrides.from_seq !== undefined) {
+    parts.push('从第 ' + overrides.from_seq + ' 步开始')
+  }
+  if (overrides.model) parts.push('模型 ' + overrides.model)
+  if (overrides.system_prompt !== null && overrides.system_prompt !== undefined) {
+    parts.push('Prompt 正文')
+  }
+  if (overrides.preset) parts.push('回放模式 ' + overrides.preset)
+  if (overrides.policy) parts.push('副作用策略')
+  return parts.join('、')
+}
+
+/**
+ * 用例页上「最近一次结论」的前提。
  *
  * 只在**记录过**、且与当前定义不一致时才说话：没有记录就说「一致」，等于把「不知道」写成
  * 「没问题」——那是这一层最不该犯的错。
+ *
+ * 有覆盖时不许写「当前定义已改动」：那句话没有被任何记录支撑（定义可能一个字都没改，
+ * 差的只是这一次的执行覆盖）。摘要只能说明「判据与当前定义不一致」，原因由覆盖那一列说。
  */
 export function definitionDriftNotice(item: {
   definition_digest?: string | null
   last_definition_digest?: string | null
+  last_definition_overrides?: RunOverrides | null
 } | null | undefined): string {
   const last = item?.last_definition_digest
-  if (!item || !last || last === item.definition_digest) return ''
+  if (!item || !last) return ''
+  const changed = last !== item.definition_digest
+  const overrides = describeOverrides(item.last_definition_overrides)
+  if (overrides) {
+    return (
+      '最近一次结论是在执行覆盖下得出的（' + overrides + '）' +
+      (changed ? '；它与当前定义的判据不一致，因此不描述现在这份定义。' : '。')
+    )
+  }
+  if (!changed) return ''
   return '最近一次结论是在另一版定义下得出的：当前定义已改动，那次结论不描述现在这份定义。'
 }

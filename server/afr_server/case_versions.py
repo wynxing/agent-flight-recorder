@@ -48,6 +48,24 @@ last_*              **执行记账**（最近一次结论、时间、成因、�
 **断言的归一化**：断言先按 `AssertionSpec` 解析再计入摘要，因此省略字段与显式写 null
 （`{"type": "no_error"}` 与 `{"type": "no_error", "value": null, "tool": null, ...}`）
 是同一份定义。解析不了的旧数据照原样参与摘要，绝不因此让一次提交失败。
+
+## 定义与「有效定义」
+
+用例行上的那一份是**定义**（`definition_digest`）；一次执行真正按着跑的那一份是
+**有效定义** = 定义 ⊕ 这次执行**显式给出的回放覆盖**（见 `run_overrides`）。
+
+两者必须分开记，因为覆盖是真实存在的：单条运行可以指定 `from_seq` / `preset` / `policy` /
+`model` / `system_prompt`，批量格子还会把当列条件（模型、Prompt 正文）带下来。只记基础定义、
+却把结论说成「是在这一版定义下得出的」，就是**错误归属**：那条结论其实不是在它上面判出来的。
+因此 `last_definition_digest` 记的是**有效定义**，`last_definition_overrides` 记的是覆盖本身
+（结构化；空 = 没有覆盖）。
+
+**没有覆盖时两者相同**，因此默认路径下「最近一次结论所用的定义」与用例自己的定义（同样也是
+用例集版本里那个成员摘要）可以直接比对。**有覆盖时必然不同**，此时读者要看的是覆盖那一列。
+
+**预算不计入有效定义。** 它约束的是「这次跑多少 / 跑没跑完」，不是「判据是什么」：因预算停下
+的那次结论已经由成因码 `budget_exceeded` 与回放 Run 上的记账如实表达，再把它塞进定义摘要，
+只会让同一个数字既表示判据、又表示额度。
 """
 
 from __future__ import annotations
@@ -69,6 +87,10 @@ CANONICALIZATION = "cs1"
 VERSION_PREFIX = f"{CANONICALIZATION}:"
 #: 单条用例定义摘要的前缀（`cs1m:<hex>`）。m = member，即「某版里的一个成员」。
 MEMBER_PREFIX = f"{CANONICALIZATION}m:"
+
+#: 一次执行可以显式覆盖的回放前提。它们与 `snapshot_of` 的字段**同名**，因此合并就是同名字段
+#: 覆盖（见 `effective_snapshot`）——覆盖与定义的字段名不搞第二套，避免两处各写一份映射。
+OVERRIDE_FIELDS: tuple[str, ...] = ("from_seq", "preset", "policy", "model", "system_prompt")
 
 
 def canonical_json(payload: Any) -> str:
@@ -140,6 +162,69 @@ def definition_of(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "system_prompt": snapshot.get("system_prompt"),
         },
     }
+
+
+def run_overrides(
+    *,
+    from_seq: int | None = None,
+    preset: Any = None,
+    policy: Any = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
+    budget: Any = None,
+) -> dict[str, Any]:
+    """这次执行**显式给出**的回放覆盖（没给的就是没给，不补默认值）。
+
+    None 一律读作「调用方没有指定」，因此它不会出现在结果里：用例定义里那个值照旧生效。
+    这与 `resolve_plan` 一直以来的读法一致（`from_seq or ...`、`system_prompt if ... is not None`），
+    这里只是把同一件事**记下来**。
+
+    `preset` / `policy` 落成 JSON 友好的取值（枚举取 `.value`、模型取 json dump），因为覆盖
+    要与定义一起进摘要：同一个语义在摘要里必须是同一个字符串。
+
+    `budget` **不参与**：它不改变判据，只约束这次跑多少（见模块说明）。它在这里被显式收下，
+    是为了让调用方一眼看到「预算不算覆盖」这件事是有意为之，而不是漏了。
+    """
+
+    overrides: dict[str, Any] = {}
+    if from_seq is not None:
+        overrides["from_seq"] = int(from_seq)
+    if preset is not None:
+        overrides["preset"] = getattr(preset, "value", None) or str(preset)
+    if policy is not None:
+        overrides["policy"] = (
+            policy if isinstance(policy, Mapping) else policy.model_dump(mode="json")
+        )
+    if model is not None:
+        overrides["model"] = model
+    if system_prompt is not None:
+        overrides["system_prompt"] = system_prompt
+    del budget  # 只为了在签名里露面（见上），不参与覆盖
+    return overrides
+
+
+def effective_snapshot(snapshot: Mapping[str, Any], overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """有效定义：基础定义盖上这次执行的覆盖。
+
+    **这是覆盖唯一被合并的地方。** 计划与记录都必须走这里，否则「按什么跑」与「记成什么」
+    会各说一套——那正是「实际从第 1 步回放、却把结论记成第 15 步那一版」的成因。
+
+    只认 `OVERRIDE_FIELDS` 里的字段：写错一个键（例如 `fromSeq`）会被当场拒绝，而不是安静地
+    留下一个「摘要变了、执行没变」的幽灵差异。
+    """
+
+    merged = dict(snapshot)
+    for name, value in dict(overrides or {}).items():
+        if name not in OVERRIDE_FIELDS:
+            raise ValueError(f"unknown override: {name}")
+        merged[name] = value
+    return merged
+
+
+def effective_digest(snapshot: Mapping[str, Any], overrides: Mapping[str, Any] | None = None) -> str:
+    """有效定义的摘要：`last_definition_digest` 记的就是它。"""
+
+    return member_digest(definition_of(effective_snapshot(snapshot, overrides)))
 
 
 def member_digest(definition: Mapping[str, Any]) -> str:
@@ -300,8 +385,11 @@ __all__ = [
     "definition_digest_of_case",
     "definition_of",
     "drift_of",
+    "effective_digest",
+    "effective_snapshot",
     "member_digest",
     "member_of",
     "record_version",
+    "run_overrides",
     "snapshot_of",
 ]

@@ -108,3 +108,21 @@ def test_the_docs_keep_the_unbuilt_parts_of_versioning() -> None:
     assert "按当前用例反推" in readme
     assert "无版本记录" in architecture
     assert "按当前用例反推" in architecture
+
+
+def test_the_docs_state_the_effective_definition_rule() -> None:
+    """「最近一次结论所用的定义」包含执行覆盖：这条规则必须在文档里，且不许被简化掉。
+
+    只写 `last_definition_digest` 而不说它覆盖了单次运行的覆盖，读者会以为「摘要不同 = 定义被改了」——
+    那正是这一层要避免的错误归属（审核在真机上抓到过：实际从第 1 步回放，却记成第 15 步那一版）。
+    这三份文档各自承担不同读者：协议给实现者、架构给维护者、README 给使用者。
+    """
+
+    for relative in ("docs/protocol.md", "docs/architecture.md", "README.md"):
+        body = _read(relative)
+        assert "有效定义" in body, f"{relative} 没有说明「有效定义」这条规则"
+        assert "last_definition_overrides" in body, f"{relative} 没有给出覆盖那一列"
+
+    # 预算是**有意**不进定义的：这条边界也要留在文档里（否则下一个人会把它加回去）。
+    for relative in ("docs/protocol.md", "README.md"):
+        assert "预算" in _read(relative), f"{relative} 没有说明预算与定义的关系"

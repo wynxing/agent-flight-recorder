@@ -34,7 +34,9 @@ from agent_flight_recorder.replay.reasons import InconclusiveCode, InconclusiveR
 from .case_versions import (
     case_set_payload,
     case_set_version_id,
+    effective_snapshot,
     record_version,
+    run_overrides,
     snapshot_of,
 )
 from .cases import ResultHook, resolve_plan, run_case_blocking
@@ -146,6 +148,29 @@ def _cell_condition(session: Any, case: CaseTable, requested: dict[str, Any]) ->
         # 验证的结论，这是「改完到底有没有变好」最容易骗到人的地方。
         "preset": ReplayPreset.REGRESS.value if (prompt or model) else None,
     }
+
+
+def _condition_run_args(condition: dict[str, Any]) -> dict[str, Any]:
+    """一个条件里**参与执行前提**的那三项，按执行入口认的形态给出（preset 是枚举）。
+
+    `prompt` 只是条件的标签（版本名），正文在 `system_prompt` 里，因此标签不进前提。
+    """
+
+    return {
+        "preset": ReplayPreset(condition["preset"]) if condition.get("preset") else None,
+        "model": condition.get("model"),
+        "system_prompt": condition.get("system_prompt"),
+    }
+
+
+def _condition_premise(condition: dict[str, Any]) -> dict[str, Any]:
+    """同一份前提的**记录形态**（JSON 友好）：摘要与覆盖列都从它来。
+
+    与 `_condition_run_args` 是同一处映射的两种形态：执行要枚举、记录要字符串，
+    因此两边永远说的是同一件事（case_versions.run_overrides 同时负责规范化）。
+    """
+
+    return run_overrides(**_condition_run_args(condition))
 
 
 def _preset_prompt(session: Any, case: CaseTable, name: str) -> str:
@@ -306,10 +331,9 @@ def estimate_suite(
                 case.name,
                 condition,
                 resolve_plan(
-                    snapshot_of(case),
-                    preset=ReplayPreset(condition["preset"]) if condition.get("preset") else None,
-                    model=condition.get("model"),
-                    system_prompt=condition.get("system_prompt"),
+                    # 与真跑一次时同一处合并（cases.effective_snapshot）：预估与实际执行
+                    # 对「这一格按什么跑」必须是同一个答案。
+                    effective_snapshot(snapshot_of(case), _condition_premise(condition)),
                 ),
             )
             for case in cases
@@ -446,7 +470,6 @@ def _run_item(
     """
 
     _update_item(item_id, status="running", started_at=utcnow())
-    preset = ReplayPreset(condition["preset"]) if condition.get("preset") else None
 
     def _finish(
         verdict: str, results: list[dict[str, Any]], cause: InconclusiveReason | None
@@ -470,9 +493,8 @@ def _run_item(
         run_case_blocking(
             case_id,
             definition=definition,
-            preset=preset,
-            model=condition.get("model"),
-            system_prompt=condition.get("system_prompt"),
+            # 执行参数与记录前提来自同一处映射：格子的前提不会随调用点而变。
+            **_condition_run_args(condition),
             on_started=lambda run_id: _update_item(item_id, run_id=run_id),
             on_result=on_result,
             condition=condition,

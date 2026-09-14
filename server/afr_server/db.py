@@ -52,6 +52,9 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "last_cause": "JSON",
         "last_condition": "JSON",
         "last_definition_digest": "TEXT",
+        # 单次运行显式给出的回放覆盖（见 cases.run_overrides）。存量行没有它，读出来是
+        # 「那次执行没有覆盖记录」——与「没有覆盖」在 API 上由摘要那一列一起区分（见 protocol）。
+        "last_definition_overrides": "JSON",
     },
     # 整批预算：声明的上限与整批的记账都是后加的字段，旧库要能直接补上。
     # case_set_version 同理：套件所属的用例集版本（见 case_versions.py）。补出来的列在
