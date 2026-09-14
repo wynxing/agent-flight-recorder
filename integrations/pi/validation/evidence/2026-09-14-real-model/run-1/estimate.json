@@ -1,0 +1,21 @@
+{
+  "cells": 30,
+  "model_calls": 114,
+  "cost_usd": 0.100922,
+  "cost_is_estimate": true,
+  "unknown": [],
+  "detail": "预计 114 次真实模型调用，估算成本约 $0.100922（估算）。这是估算：它按父录制里真实发生的调用次数与成本折算，**不包含**回归时超出父录制尾部的新增步骤；价格表是本地快照。",
+  "declared": null,
+  "samples": 3,
+  "arms": [
+    "baseline",
+    "grounded"
+  ],
+  "tasks": [
+    "batch-budget-total-calls",
+    "cause-precedence-blocked-vs-budget",
+    "write-tool-gate-on-recorded-regress",
+    "unknown-cost-does-not-stop",
+    "pi-tape-mismatch-code"
+  ]
+}

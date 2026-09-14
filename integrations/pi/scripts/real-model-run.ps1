@@ -24,7 +24,9 @@ param(
     [int]$BudgetModels = 400,
     [double]$BudgetCostUsd = 2.0,
     [string]$Out = 'artifacts/round8',
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    # 只打印某一轮归档的合计，不产生任何调用（用于重算历史运行的数字）。
+    [string]$SummaryOnly = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +79,22 @@ Write-Host "声明的上限：$BudgetModels 次真实模型调用 / `$$BudgetCos
 
 $validateArgs = @('run','validate','--','--repo',$repo,'--out',$outDir,'--suite',$Suite,
     '--provider',$Provider,'--model',$Model,'--models-path',$modelsPath,'--tool-source',$ToolSource)
+function Show-ArchiveTotals {
+    param([string]$Path)
+    $archive = Get-Content $Path -Raw | ConvertFrom-Json
+    $sum = { param($items, $selector) ($items | ForEach-Object { $selector.Invoke($_) } | Measure-Object -Sum).Sum }
+    $recordCalls = & $sum $archive.records { param($x) $x.modelCalls }
+    $sampleCalls = & $sum $archive.samples { param($x) $x.modelCalls }
+    $recordTokens = & $sum $archive.records { param($x) $x.tokens.total }
+    $sampleTokens = & $sum $archive.samples { param($x) $x.tokens.total }
+    $recordCost = & $sum $archive.records { param($x) $(if ($null -eq $x.costUsd) { 0 } else { $x.costUsd }) }
+    $sampleCost = & $sum $archive.samples { param($x) $(if ($null -eq $x.costUsd) { 0 } else { $x.costUsd }) }
+    Write-Host "  录制 $recordCalls 次调用 / $recordTokens token；回归 $sampleCalls 次调用 / $sampleTokens token"
+    Write-Host "  合计 $($recordCalls + $sampleCalls) 次真实模型调用 / $($recordTokens + $sampleTokens) token；成本（按本地价目估算）：`$$([Math]::Round($recordCost + $sampleCost, 6))"
+    Write-Host "  批次账目：声明 $(($archive.batch.declared | ConvertTo-Json -Compress))；已用 $($archive.batch.usage.model_calls_used) 次 / `$$($archive.batch.usage.cost_used_usd)"
+    Write-Host "  是否触顶：$($archive.batch.usage.exceeded)；触顶维度：$($archive.batch.usage.stopped_by)；未启动格子：$($archive.batch.not_started)"
+}
+if ($SummaryOnly) { Show-ArchiveTotals -Path (Resolve-Path $SummaryOnly).Path; return }
 function Invoke-Phase {
     param([string[]]$Extra)
     Push-Location $pi
@@ -100,17 +118,7 @@ if ($CheckOnly) {
 # 录完之后、回归之前会免费生成预估，并按声明的额度把关（超了就不启动回归，如实标成 not_started）。
 Invoke-Phase @('--phase','all','--samples',"$Samples",'--budget-models',"$BudgetModels",'--budget-cost-usd',"$BudgetCostUsd")
 
-$archive = Get-Content (Join-Path $outDir 'archive.json') -Raw | ConvertFrom-Json
-$sampleCalls = ($archive.samples | Measure-Object -Property modelCalls -Sum).Sum
-$recordCalls = ($archive.records | Measure-Object -Property modelCalls -Sum).Sum
-$sampleTokens = ($archive.samples | Measure-Object -Property @{Expression={$_.tokens.total}} -Sum).Sum
-$recordTokens = ($archive.records | Measure-Object -Property @{Expression={$_.tokens.total}} -Sum).Sum
-$sampleCost = ($archive.samples | Measure-Object -Property @{Expression={if ($null -eq $_.costUsd) { 0 } else { $_.costUsd }}} -Sum).Sum
-$recordCost = ($archive.records | Measure-Object -Property @{Expression={if ($null -eq $_.costUsd) { 0 } else { $_.costUsd }}} -Sum).Sum
 Write-Host ''
 Write-Host '本轮实际发生（来自归档，不是估算）：' -ForegroundColor Cyan
-Write-Host "  录制 $recordCalls 次调用 / $recordTokens token；回归 $sampleCalls 次调用 / $sampleTokens token"
-Write-Host "  合计 $($recordCalls + $sampleCalls) 次真实模型调用 / $($recordTokens + $sampleTokens) token；成本（按本地价目估算）：`$$([Math]::Round($recordCost + $sampleCost, 6))"
-Write-Host "  批次账目：已用 $($archive.batch.usage.model_calls_used) 次 / `$$($archive.batch.usage.cost_used_usd)"
-Write-Host "  是否触顶：$($archive.batch.usage.exceeded)；触顶维度：$($archive.batch.usage.stopped_by)；未启动格子：$($archive.batch.not_started)"
+Show-ArchiveTotals -Path (Join-Path $outDir 'archive.json')
 Write-Host "  归档：$outDir/archive.json；报告：$outDir/report.md"

@@ -1,0 +1,1605 @@
+{
+  "version": 1,
+  "manifest": {
+    "generated_at": "2026-09-14T03:38:42.591Z",
+    "suite": "validation\\failure-suite.json",
+    "suite_sha256": "168e7aebc08f1e64e8df54efeab4c3c39279f35d330ed47b1013204424910f4e",
+    "tasks": [
+      "batch-budget-total-calls",
+      "cause-precedence-blocked-vs-budget",
+      "write-tool-gate-on-recorded-regress",
+      "unknown-cost-does-not-stop",
+      "pi-tape-mismatch-code"
+    ],
+    "commit": "b5332540bd702f789088aa90603cc7dd5d1084ed",
+    "provider": "msee-gateway",
+    "model": "deepseek-v4.1-flash",
+    "prompts": {
+      "baseline_sha256": "5a64b425d0abd219a82b9617a878b426ceb7ab9f2278684b652d055b88ac5645",
+      "grounded_sha256": "43e6808f3458dfe735d606ab27db8ea64cf188c9b9cb41bd448ff67eb62d9486"
+    },
+    "tool_source": "snapshot",
+    "samples_per_arm": 3,
+    "phase": "regress",
+    "arms": [
+      "baseline",
+      "grounded"
+    ],
+    "samples_planned": 30,
+    "declared_budget": {
+      "max_cost_usd": 2,
+      "max_model_calls": 400
+    },
+    "models_path": "artifacts\\models.json",
+    "negative_control": null
+  },
+  "batch": {
+    "declared": {
+      "max_cost_usd": 2,
+      "max_model_calls": 400
+    },
+    "usage": {
+      "max_cost_usd": 2,
+      "max_model_calls": 400,
+      "model_calls_used": 0,
+      "cost_used_usd": 0,
+      "cost_is_estimate": true,
+      "exceeded": false,
+      "stopped_by": null,
+      "cost_unknown": false,
+      "detail": "没有因预算停止：已用 0 次真实模型调用。没有产生成本。"
+    },
+    "not_started": 0,
+    "not_started_cells": []
+  },
+  "records": [
+    {
+      "task": "batch-budget-total-calls",
+      "run": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "parentRunId": null,
+      "mode": "record",
+      "toolSource": "recorded",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": null,
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 11,
+      "tokens": {
+        "input": 19899,
+        "output": 1865,
+        "total": 63492
+      },
+      "costUsd": 0.005609,
+      "startedAt": "2026-09-14T03:21:53.840Z",
+      "endedAt": "2026-09-14T03:22:07.831Z",
+      "durationMs": 13991,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.005609,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.005609（估算）。"
+      }
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "run": "8bd79e28821c4462b285de7241b70e45",
+      "parentRunId": null,
+      "mode": "record",
+      "toolSource": "recorded",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": null,
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 7,
+      "tokens": {
+        "input": 10418,
+        "output": 1089,
+        "total": 33139
+      },
+      "costUsd": 0.003011,
+      "startedAt": "2026-09-14T03:22:07.846Z",
+      "endedAt": "2026-09-14T03:22:17.216Z",
+      "durationMs": 9370,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.003011,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.003011（估算）。"
+      }
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "run": "95540ef81edd49c0ae2479bd933f375a",
+      "parentRunId": null,
+      "mode": "record",
+      "toolSource": "recorded",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": null,
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": {
+        "input": 10111,
+        "output": 1588,
+        "total": 32307
+      },
+      "costUsd": 0.003273,
+      "startedAt": "2026-09-14T03:22:17.225Z",
+      "endedAt": "2026-09-14T03:22:28.854Z",
+      "durationMs": 11629,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.003273,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.003273（估算）。"
+      }
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "run": "d1b0f0d9566f407d910df9cf49b1f741",
+      "parentRunId": null,
+      "mode": "record",
+      "toolSource": "recorded",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": null,
+      "cause": null,
+      "modelCalls": 3,
+      "toolCalls": 3,
+      "tokens": {
+        "input": 4378,
+        "output": 648,
+        "total": 10786
+      },
+      "costUsd": 0.001391,
+      "startedAt": "2026-09-14T03:22:28.867Z",
+      "endedAt": "2026-09-14T03:22:35.554Z",
+      "durationMs": 6687,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 3,
+        "cost_used_usd": 0.001391,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 3 次真实模型调用。已用成本约 $0.001391（估算）。"
+      }
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "run": "f9f80d07a5a84a42926643096eddcafb",
+      "parentRunId": null,
+      "mode": "record",
+      "toolSource": "recorded",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": null,
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 12513,
+        "output": 1189,
+        "total": 38150
+      },
+      "costUsd": 0.003538,
+      "startedAt": "2026-09-14T03:22:35.567Z",
+      "endedAt": "2026-09-14T03:22:46.295Z",
+      "durationMs": 10728,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.003538,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.003538（估算）。"
+      }
+    }
+  ],
+  "samples": [
+    {
+      "run": "f475b4ad18d14b8bb89a42cb4c7dea64",
+      "parentRunId": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 8,
+      "tokens": {
+        "input": 20961,
+        "output": 1652,
+        "total": 107093
+      },
+      "costUsd": 0.005702,
+      "startedAt": "2026-09-14T03:29:55.812Z",
+      "endedAt": "2026-09-14T03:30:31.813Z",
+      "durationMs": 36001,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.005702,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.005702（估算）。"
+      },
+      "task": "batch-budget-total-calls",
+      "arm": "baseline",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "6defe169ed9e4fca9a11c7cae548e4fb",
+      "parentRunId": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 9,
+      "tokens": {
+        "input": 20545,
+        "output": 1654,
+        "total": 63415
+      },
+      "costUsd": 0.005612,
+      "startedAt": "2026-09-14T03:30:31.826Z",
+      "endedAt": "2026-09-14T03:30:44.586Z",
+      "durationMs": 12760,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.005612,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.005612（估算）。"
+      },
+      "task": "batch-budget-total-calls",
+      "arm": "baseline",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "9aa1f813ddbd4339b9cda022c8727814",
+      "parentRunId": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": {
+        "input": 19419,
+        "output": 1794,
+        "total": 62557
+      },
+      "costUsd": 0.005456,
+      "startedAt": "2026-09-14T03:30:44.600Z",
+      "endedAt": "2026-09-14T03:30:58.253Z",
+      "durationMs": 13653,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.005456,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.005456（估算）。"
+      },
+      "task": "batch-budget-total-calls",
+      "arm": "baseline",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "6328fd3c8d044e29a722131f0f5859fc",
+      "parentRunId": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 8,
+      "toolCalls": 13,
+      "tokens": {
+        "input": 31441,
+        "output": 3378,
+        "total": 187267
+      },
+      "costUsd": 0.009147,
+      "startedAt": "2026-09-14T03:30:58.265Z",
+      "endedAt": "2026-09-14T03:31:23.788Z",
+      "durationMs": 25523,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 8,
+        "cost_used_usd": 0.009147,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 8 次真实模型调用。已用成本约 $0.009147（估算）。"
+      },
+      "task": "batch-budget-total-calls",
+      "arm": "grounded",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "b5d9b5be7a0a464fb51508d0bd4a1870",
+      "parentRunId": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 8,
+      "tokens": {
+        "input": 23095,
+        "output": 2394,
+        "total": 109457
+      },
+      "costUsd": 0.006661,
+      "startedAt": "2026-09-14T03:31:23.806Z",
+      "endedAt": "2026-09-14T03:31:42.640Z",
+      "durationMs": 18834,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.006661,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.006661（估算）。"
+      },
+      "task": "batch-budget-total-calls",
+      "arm": "grounded",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "ba2e25e4506a4c27a0bc04d9f9055f38",
+      "parentRunId": "2df7b0d99b3b4cb1ab365d723ef6587a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 12,
+      "toolCalls": 18,
+      "tokens": {
+        "input": 30912,
+        "output": 3688,
+        "total": 297768
+      },
+      "costUsd": 0.009235,
+      "startedAt": "2026-09-14T03:31:42.653Z",
+      "endedAt": "2026-09-14T03:32:16.720Z",
+      "durationMs": 34067,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 12,
+        "cost_used_usd": 0.009235,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 12 次真实模型调用。已用成本约 $0.009235（估算）。"
+      },
+      "task": "batch-budget-total-calls",
+      "arm": "grounded",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "85cca2abe4d64a5380c7bcb11dbc70e1",
+      "parentRunId": "8bd79e28821c4462b285de7241b70e45",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 3,
+      "toolCalls": 4,
+      "tokens": {
+        "input": 9754,
+        "output": 807,
+        "total": 21697
+      },
+      "costUsd": 0.002679,
+      "startedAt": "2026-09-14T03:32:16.743Z",
+      "endedAt": "2026-09-14T03:32:23.960Z",
+      "durationMs": 7217,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 3,
+        "cost_used_usd": 0.002679,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 3 次真实模型调用。已用成本约 $0.002679（估算）。"
+      },
+      "task": "cause-precedence-blocked-vs-budget",
+      "arm": "baseline",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "a7dfc6b2eb2846cbb985eac8cacbd466",
+      "parentRunId": "8bd79e28821c4462b285de7241b70e45",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 6,
+      "tokens": {
+        "input": 10508,
+        "output": 1316,
+        "total": 54192
+      },
+      "costUsd": 0.00318,
+      "startedAt": "2026-09-14T03:32:23.967Z",
+      "endedAt": "2026-09-14T03:32:38.437Z",
+      "durationMs": 14470,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.00318,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.003180（估算）。"
+      },
+      "task": "cause-precedence-blocked-vs-budget",
+      "arm": "baseline",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "ca79f0f853124f1ba083a1e477f6d4df",
+      "parentRunId": "8bd79e28821c4462b285de7241b70e45",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 9,
+      "tokens": {
+        "input": 13922,
+        "output": 1791,
+        "total": 56929
+      },
+      "costUsd": 0.004245,
+      "startedAt": "2026-09-14T03:32:38.448Z",
+      "endedAt": "2026-09-14T03:32:52.861Z",
+      "durationMs": 14413,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.004245,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.004245（估算）。"
+      },
+      "task": "cause-precedence-blocked-vs-budget",
+      "arm": "baseline",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "352c226182e248ae94b7a6977642bf79",
+      "parentRunId": "8bd79e28821c4462b285de7241b70e45",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 8,
+      "toolCalls": 13,
+      "tokens": {
+        "input": 13771,
+        "output": 3232,
+        "total": 88171
+      },
+      "costUsd": 0.005163,
+      "startedAt": "2026-09-14T03:32:52.874Z",
+      "endedAt": "2026-09-14T03:33:21.220Z",
+      "durationMs": 28346,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 8,
+        "cost_used_usd": 0.005163,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 8 次真实模型调用。已用成本约 $0.005163（估算）。"
+      },
+      "task": "cause-precedence-blocked-vs-budget",
+      "arm": "grounded",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "045e7cf6dddb4fe1a83b5fd7f1408d59",
+      "parentRunId": "8bd79e28821c4462b285de7241b70e45",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 8,
+      "toolCalls": 13,
+      "tokens": {
+        "input": 28498,
+        "output": 3830,
+        "total": 135112
+      },
+      "costUsd": 0.008797,
+      "startedAt": "2026-09-14T03:33:21.241Z",
+      "endedAt": "2026-09-14T03:33:47.397Z",
+      "durationMs": 26156,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 8,
+        "cost_used_usd": 0.008797,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 8 次真实模型调用。已用成本约 $0.008797（估算）。"
+      },
+      "task": "cause-precedence-blocked-vs-budget",
+      "arm": "grounded",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "75fe39450d494044ba7fce52fd117665",
+      "parentRunId": "8bd79e28821c4462b285de7241b70e45",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 6,
+      "tokens": {
+        "input": 17657,
+        "output": 1492,
+        "total": 65741
+      },
+      "costUsd": 0.004869,
+      "startedAt": "2026-09-14T03:33:47.413Z",
+      "endedAt": "2026-09-14T03:34:00.546Z",
+      "durationMs": 13133,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.004869,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.004869（估算）。"
+      },
+      "task": "cause-precedence-blocked-vs-budget",
+      "arm": "grounded",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "a079a498cb4c41c5b01821cfabd40673",
+      "parentRunId": "95540ef81edd49c0ae2479bd933f375a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 7,
+      "tokens": {
+        "input": 10455,
+        "output": 1073,
+        "total": 48008
+      },
+      "costUsd": 0.003008,
+      "startedAt": "2026-09-14T03:34:00.553Z",
+      "endedAt": "2026-09-14T03:34:12.703Z",
+      "durationMs": 12150,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.003008,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.003008（估算）。"
+      },
+      "task": "write-tool-gate-on-recorded-regress",
+      "arm": "baseline",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "2e307ec111aa475cb57eab8a06e7ca3f",
+      "parentRunId": "95540ef81edd49c0ae2479bd933f375a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 10188,
+        "output": 721,
+        "total": 31261
+      },
+      "costUsd": 0.002717,
+      "startedAt": "2026-09-14T03:34:12.713Z",
+      "endedAt": "2026-09-14T03:34:21.251Z",
+      "durationMs": 8538,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.002717,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.002717（估算）。"
+      },
+      "task": "write-tool-gate-on-recorded-regress",
+      "arm": "baseline",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "11b6c69fc4684a9bbdfa4280f65438db",
+      "parentRunId": "95540ef81edd49c0ae2479bd933f375a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": {
+        "input": 10027,
+        "output": 933,
+        "total": 31568
+      },
+      "costUsd": 0.002822,
+      "startedAt": "2026-09-14T03:34:21.262Z",
+      "endedAt": "2026-09-14T03:34:30.951Z",
+      "durationMs": 9689,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.002822,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.002822（估算）。"
+      },
+      "task": "write-tool-gate-on-recorded-regress",
+      "arm": "baseline",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "ebfe1edbe8dd4aeb8cf32f081ab2a9b2",
+      "parentRunId": "95540ef81edd49c0ae2479bd933f375a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 10220,
+        "output": 1083,
+        "total": 32679
+      },
+      "costUsd": 0.002963,
+      "startedAt": "2026-09-14T03:34:30.961Z",
+      "endedAt": "2026-09-14T03:34:39.852Z",
+      "durationMs": 8891,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.002963,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.002963（估算）。"
+      },
+      "task": "write-tool-gate-on-recorded-regress",
+      "arm": "grounded",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "92bf7531ad2b4f41aaf775e3590f5dcf",
+      "parentRunId": "95540ef81edd49c0ae2479bd933f375a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 6,
+      "tokens": {
+        "input": 13899,
+        "output": 1461,
+        "total": 47744
+      },
+      "costUsd": 0.004022,
+      "startedAt": "2026-09-14T03:34:39.865Z",
+      "endedAt": "2026-09-14T03:34:56.631Z",
+      "durationMs": 16766,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.004022,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.004022（估算）。"
+      },
+      "task": "write-tool-gate-on-recorded-regress",
+      "arm": "grounded",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "451ff3f3161f422f8ba88610a5ef2e8b",
+      "parentRunId": "95540ef81edd49c0ae2479bd933f375a",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 10259,
+        "output": 956,
+        "total": 42319
+      },
+      "costUsd": 0.002888,
+      "startedAt": "2026-09-14T03:34:56.643Z",
+      "endedAt": "2026-09-14T03:35:08.565Z",
+      "durationMs": 11922,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.002888,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.002888（估算）。"
+      },
+      "task": "write-tool-gate-on-recorded-regress",
+      "arm": "grounded",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "a7dadace162948d8a01533ededfaaf8e",
+      "parentRunId": "d1b0f0d9566f407d910df9cf49b1f741",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 4597,
+        "output": 896,
+        "total": 15861
+      },
+      "costUsd": 0.001603,
+      "startedAt": "2026-09-14T03:35:08.576Z",
+      "endedAt": "2026-09-14T03:35:18.310Z",
+      "durationMs": 9734,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.001603,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.001603（估算）。"
+      },
+      "task": "unknown-cost-does-not-stop",
+      "arm": "baseline",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "8711b8b13fea42d09981eaa3e16daf10",
+      "parentRunId": "d1b0f0d9566f407d910df9cf49b1f741",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 5338,
+        "output": 659,
+        "total": 20973
+      },
+      "costUsd": 0.001609,
+      "startedAt": "2026-09-14T03:35:18.320Z",
+      "endedAt": "2026-09-14T03:35:28.156Z",
+      "durationMs": 9836,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.001609,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.001609（估算）。"
+      },
+      "task": "unknown-cost-does-not-stop",
+      "arm": "baseline",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "ad9302b708bd4d25bd998b17ffa4df98",
+      "parentRunId": "d1b0f0d9566f407d910df9cf49b1f741",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 3,
+      "toolCalls": 2,
+      "tokens": {
+        "input": 4655,
+        "output": 475,
+        "total": 10762
+      },
+      "costUsd": 0.001338,
+      "startedAt": "2026-09-14T03:35:28.160Z",
+      "endedAt": "2026-09-14T03:35:35.278Z",
+      "durationMs": 7118,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 3,
+        "cost_used_usd": 0.001338,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 3 次真实模型调用。已用成本约 $0.001338（估算）。"
+      },
+      "task": "unknown-cost-does-not-stop",
+      "arm": "baseline",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "992475f7e508407898d8f561cc2fa194",
+      "parentRunId": "d1b0f0d9566f407d910df9cf49b1f741",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 7,
+      "tokens": {
+        "input": 22836,
+        "output": 1703,
+        "total": 89435
+      },
+      "costUsd": 0.006148,
+      "startedAt": "2026-09-14T03:35:35.289Z",
+      "endedAt": "2026-09-14T03:35:51.270Z",
+      "durationMs": 15981,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.006148,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.006148（估算）。"
+      },
+      "task": "unknown-cost-does-not-stop",
+      "arm": "grounded",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "c584695048b646af98ef8478426a1da9",
+      "parentRunId": "d1b0f0d9566f407d910df9cf49b1f741",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 8,
+      "tokens": {
+        "input": 7716,
+        "output": 2358,
+        "total": 30682
+      },
+      "costUsd": 0.003254,
+      "startedAt": "2026-09-14T03:35:51.285Z",
+      "endedAt": "2026-09-14T03:36:05.768Z",
+      "durationMs": 14483,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.003254,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.003254（估算）。"
+      },
+      "task": "unknown-cost-does-not-stop",
+      "arm": "grounded",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "7eef0c05259242c28152825983c7d087",
+      "parentRunId": "d1b0f0d9566f407d910df9cf49b1f741",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "failed",
+      "cause": null,
+      "modelCalls": 10,
+      "toolCalls": 12,
+      "tokens": {
+        "input": 18723,
+        "output": 1855,
+        "total": 114402
+      },
+      "costUsd": 0.005343,
+      "startedAt": "2026-09-14T03:36:05.775Z",
+      "endedAt": "2026-09-14T03:36:27.988Z",
+      "durationMs": 22213,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 10,
+        "cost_used_usd": 0.005343,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 10 次真实模型调用。已用成本约 $0.005343（估算）。"
+      },
+      "task": "unknown-cost-does-not-stop",
+      "arm": "grounded",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "087f4e0faae045108cde63ec573181cb",
+      "parentRunId": "f9f80d07a5a84a42926643096eddcafb",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 7,
+      "tokens": {
+        "input": 13604,
+        "output": 1130,
+        "total": 39950
+      },
+      "costUsd": 0.003739,
+      "startedAt": "2026-09-14T03:36:28.001Z",
+      "endedAt": "2026-09-14T03:36:56.546Z",
+      "durationMs": 28545,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.003739,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.003739（估算）。"
+      },
+      "task": "pi-tape-mismatch-code",
+      "arm": "baseline",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "d9fa3d20506440c389fecb777467c21a",
+      "parentRunId": "f9f80d07a5a84a42926643096eddcafb",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": {
+        "input": 11353,
+        "output": 1025,
+        "total": 35290
+      },
+      "costUsd": 0.003174,
+      "startedAt": "2026-09-14T03:36:56.559Z",
+      "endedAt": "2026-09-14T03:37:26.067Z",
+      "durationMs": 29508,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 4,
+        "cost_used_usd": 0.003174,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 4 次真实模型调用。已用成本约 $0.003174（估算）。"
+      },
+      "task": "pi-tape-mismatch-code",
+      "arm": "baseline",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "c719768288cd4885a2ce7ed040df4dc2",
+      "parentRunId": "f9f80d07a5a84a42926643096eddcafb",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 6,
+      "toolCalls": 8,
+      "tokens": {
+        "input": 13032,
+        "output": 1205,
+        "total": 53661
+      },
+      "costUsd": 0.003662,
+      "startedAt": "2026-09-14T03:37:26.075Z",
+      "endedAt": "2026-09-14T03:37:38.826Z",
+      "durationMs": 12751,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 6,
+        "cost_used_usd": 0.003662,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 6 次真实模型调用。已用成本约 $0.003662（估算）。"
+      },
+      "task": "pi-tape-mismatch-code",
+      "arm": "baseline",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "e26eb2e959474938b47a1685348a2b12",
+      "parentRunId": "f9f80d07a5a84a42926643096eddcafb",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 5,
+      "toolCalls": 5,
+      "tokens": {
+        "input": 12907,
+        "output": 959,
+        "total": 51242
+      },
+      "costUsd": 0.003472,
+      "startedAt": "2026-09-14T03:37:38.838Z",
+      "endedAt": "2026-09-14T03:37:49.724Z",
+      "durationMs": 10886,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 5,
+        "cost_used_usd": 0.003472,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 5 次真实模型调用。已用成本约 $0.003472（估算）。"
+      },
+      "task": "pi-tape-mismatch-code",
+      "arm": "grounded",
+      "sample": 1,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "c6c91967cb2c4dfea07326f3db759531",
+      "parentRunId": "f9f80d07a5a84a42926643096eddcafb",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 9,
+      "toolCalls": 12,
+      "tokens": {
+        "input": 15003,
+        "output": 2052,
+        "total": 102815
+      },
+      "costUsd": 0.004655,
+      "startedAt": "2026-09-14T03:37:49.732Z",
+      "endedAt": "2026-09-14T03:38:19.075Z",
+      "durationMs": 29343,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 9,
+        "cost_used_usd": 0.004655,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 9 次真实模型调用。已用成本约 $0.004655（估算）。"
+      },
+      "task": "pi-tape-mismatch-code",
+      "arm": "grounded",
+      "sample": 2,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    },
+    {
+      "run": "a4d4b0b273764d91979dcf65ee80177e",
+      "parentRunId": "f9f80d07a5a84a42926643096eddcafb",
+      "mode": "regress",
+      "toolSource": "snapshot",
+      "status": "succeeded",
+      "complete": true,
+      "verdict": "passed",
+      "cause": null,
+      "modelCalls": 7,
+      "toolCalls": 8,
+      "tokens": {
+        "input": 14146,
+        "output": 1944,
+        "total": 71130
+      },
+      "costUsd": 0.004395,
+      "startedAt": "2026-09-14T03:38:19.087Z",
+      "endedAt": "2026-09-14T03:38:42.435Z",
+      "durationMs": 23348,
+      "budget": {
+        "max_cost_usd": 2,
+        "max_model_calls": 20,
+        "model_calls_used": 7,
+        "cost_used_usd": 0.004395,
+        "cost_is_estimate": true,
+        "exceeded": false,
+        "stopped_by": null,
+        "cost_unknown": false,
+        "detail": "没有因预算停止：已用 7 次真实模型调用。已用成本约 $0.004395（估算）。"
+      },
+      "task": "pi-tape-mismatch-code",
+      "arm": "grounded",
+      "sample": 3,
+      "results": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "uploaded": false
+    }
+  ],
+  "not_started": []
+}
