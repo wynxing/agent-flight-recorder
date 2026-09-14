@@ -117,12 +117,12 @@
       "evidence": [
         {
           "path": "integrations/pi/src/core.ts",
-          "line": 61,
+          "line": 67,
           "quote": "'missing_recorded_response',"
         },
         {
           "path": "integrations/pi/src/runner.ts",
-          "line": 208,
+          "line": 298,
           "quote": "b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);"
         }
       ]
