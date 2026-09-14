@@ -46,7 +46,15 @@ def record_parent(run_id: str = "parent-run", *, agent_module: Any = None) -> st
 
 
 def behavioral_fingerprint(events) -> list[tuple]:
-    """除时间戳、ID 与 effect_source 之外的行为内容指纹（与 LangGraph 侧同一条定义）。"""
+    """参与位置对齐的语义内容指纹（与 LangGraph 侧同一条定义）。
+
+    覆盖：事件类型、名称、工具参数、模型输出文本、工具调用的名称与参数。
+    不覆盖：事件里的其余字段——包括运行身份（id / run_id / started_at）与**框架自己的
+    消息/状态外壳**（input.messages、output.message、output.state）。后者在两个框架之间
+    本来就不一样（LangChain 是 AIMessage 的 dict，Agents SDK 是 Responses API 的条目），
+    因此「两个框架逐字一致」这句话只能限定在这条指纹 + final output 上；全部字段的边界
+    由 test_cross_framework_difference_is_confined_to_the_framework_envelope 钉住。
+    """
 
     fingerprint = []
     for event in events:
@@ -134,6 +142,8 @@ def test_reproduce_is_deterministic(parent_run: str) -> None:
 
     assert behavioral_fingerprint(parent_events) == behavioral_fingerprint(replay_events)
     assert storage.final_output_of(parent_events) == storage.final_output_of(replay_events)
+
+
     # 复现不产生任何真实调用。
     assert summary.effect_counts == {"recorded": 11}
 
@@ -301,6 +311,48 @@ def test_replay_refuses_to_guess_the_state_when_the_parent_recorded_one(afr_db) 
 # ---------------------------------------------------------------- 两个框架的对比
 
 
+#: 跨框架对比时允许不同的运行身份字段：每次回放都是新的 Run。
+RUNTIME_FIELDS = {"id", "run_id", "started_at"}
+
+#: 跨框架对比时允许不同的**框架外壳**字段。同一份文本在两个框架里的原生载体不同：
+#: LangChain 是 AIMessage / HumanMessage 序列化出来的 dict，Agents SDK 是 Responses API 的
+#: 条目（content 块、function_call 条目、instructions 等），状态快照同理（messages vs items）。
+#: 这些不是回放语义差异：参与对齐的语义内容由行为指纹与 final output 比较。
+FRAMEWORK_ENVELOPE = {
+    ("input", "messages"),
+    ("input", "message_count"),
+    ("output", "message"),
+    ("output", "state"),
+}
+
+
+def differing_fields(left: Any, right: Any) -> set[tuple[str, str]]:
+    """两个 Run 的事件里，哪些字段（含子字段）取值不同。
+
+    比行为指纹更宽：指纹只看参与对齐的语义内容，这里看**全部**字段，因此能用来证明
+    「跨框架的差异只落在运行身份与框架外壳上」——而不是只把这句话写进文档。
+    子字段只在两侧都是 dict 时展开；否则记成 (字段, "")。
+    """
+
+    assert len(left) == len(right), (
+        f"两个 Run 的事件数不同（{len(left)} vs {len(right)}），无法逐步比对"
+    )
+    diffs: set[tuple[str, str]] = set()
+    for a, b in zip(left, right):
+        payload_a, payload_b = a.model_dump(), b.model_dump()
+        for key in set(payload_a) | set(payload_b):
+            value_a, value_b = payload_a.get(key), payload_b.get(key)
+            if value_a == value_b:
+                continue
+            if isinstance(value_a, dict) and isinstance(value_b, dict):
+                for sub in set(value_a) | set(value_b):
+                    if value_a.get(sub) != value_b.get(sub):
+                        diffs.add((key, sub))
+            else:
+                diffs.add((key, ""))
+    return diffs
+
+
 def _replay_with(adapter: Any, parent: str, run_id: str, factory: Any, side_effects: Any):
     """用指定的适配层回放一份录制（绕开按 agent_name 的解析）。
 
@@ -373,6 +425,7 @@ def test_the_same_recording_replays_identically_on_both_frameworks(afr_db) -> No
     assert behavioral_fingerprint(first) == behavioral_fingerprint(second)
     assert behavioral_fingerprint(parent_events) == behavioral_fingerprint(second)
     assert storage.final_output_of(first) == storage.final_output_of(second)
+    assert storage.final_output_of(parent_events) == storage.final_output_of(second)
     assert summary.effect_counts == {"recorded": 11}
 
 
@@ -393,3 +446,43 @@ def test_an_openai_agents_recording_can_be_replayed_by_the_langgraph_adapter(afr
     with session_scope() as session:
         replay_events = storage.get_events(session, "oa-repro-lg")
     assert behavioral_fingerprint(parent_events) == behavioral_fingerprint(replay_events)
+    # 指纹相等还不够：结论也要逐字一致（这句话同样要在证据里站得住）。
+    assert storage.final_output_of(parent_events) == storage.final_output_of(replay_events)
+
+
+def test_cross_framework_difference_is_confined_to_the_framework_envelope(afr_db) -> None:
+    """同一份录制、两个适配层：差异只允许落在运行身份与框架外壳上。
+
+    这条比行为指纹严格。指纹只看参与位置对齐的语义内容（模型输出文本、工具名与参数），
+    事件里其余字段一律不看——工具事件的 side_effect 被漏记、错误状态不一致、某个标注
+    丢失，指纹都不会发现。这里逐字段比对，于是「跨框架复现」的边界变成可执行的断言：
+
+    * 语义字段（含 side_effect / error / tokens / attributes）必须在两个框架上一致；
+    * 只允许 RUNTIME_FIELDS 与 FRAMEWORK_ENVELOPE 里的字段不同。
+
+    envelope 差异本身也被钉住（至少要真的存在消息外壳差异）：如果哪天两个框架的消息载体
+    变得一致，应当同时改掉 docs/architecture.md 里那句「框架原生载体不同」，而不是让这里
+    静默通过。
+    """
+
+    parent = record_parent("envelope-parent", agent_module=langgraph_agent)
+
+    _replay_with(
+        langgraph_adapter, parent, "env-lg", langgraph_agent.agent_spec().build,
+        langgraph_agent.agent_spec().tool_side_effects,
+    )
+    _replay_with(
+        openai_agents_adapter, parent, "env-oa", agent_spec().build, agent_spec().tool_side_effects,
+    )
+
+    with session_scope() as session:
+        first = storage.get_events(session, "env-lg")
+        second = storage.get_events(session, "env-oa")
+
+    diffs = differing_fields(first, second)
+    stray = diffs - FRAMEWORK_ENVELOPE - {(field, "") for field in RUNTIME_FIELDS}
+    assert stray == set(), f"跨框架回放出现了外壳之外的差异：{sorted(stray)}"
+    # 语义字段一个都不许进差异集：上面那条断言真正的价值所在。
+    assert not any(field in {"side_effect", "error", "tokens", "attributes"} for field, _ in diffs)
+    # 外壳差异确实存在（否则这段说明与文档就该一起改）。
+    assert {("output", "message"), ("input", "messages")} & diffs

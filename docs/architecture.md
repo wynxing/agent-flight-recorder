@@ -373,9 +373,16 @@ run_replay(*, session, recorder, agent_factory, tool_side_effects, ...) -> Repla
 **这条边界验证到哪一层**（如实标注，不把「已验证的边界」写成「已证明」）：
 
 * 已验证：录制 → 复现 → 回归 → 对比 → 用例判定的整条闭环在两个框架上都跑得通；同一份录制
-  分别用两个适配层回放，行为内容与最终产出逐字一致；复现模式不产生任何真实调用；副作用闸门
-  默认拦截、显式允许时真实执行并留警告；成因分类与预算触顶的语义一致。证据是两个 example 的
-  离线端到端测试，以及 `sdk/tests/test_replay_adapters.py`、`sdk/tests/test_replay_openai_agents.py`。
+  分别用两个适配层回放，**参与位置对齐的语义内容（行为指纹）与最终产出相等**；复现模式不产生
+  任何真实调用；副作用闸门默认拦截、显式允许时真实执行并留警告；成因分类与预算触顶的语义一致。
+  证据是两个 example 的离线端到端测试，以及 `sdk/tests/test_replay_adapters.py`、
+  `sdk/tests/test_replay_openai_agents.py`。
+* **不是**「除运行时字段外逐字段相等」：框架自己的消息与状态外壳（`input.messages`、
+  `output.message`、`output.state`）在两个框架里本来就不一样（LangChain 是 `AIMessage` 的 dict，
+  Agents SDK 是 Responses API 的条目），运行身份字段（`id` / `run_id` / `started_at`）每次回放也都是新的。
+  跨框架的字段级边界由 `examples/openai_agents_sre_agent/tests/test_agents_scenario.py::
+  test_cross_framework_difference_is_confined_to_the_framework_envelope` 逐字段钉住：差异只允许落在这两类字段上，
+  `side_effect` / `error` / `tokens` / `attributes` 等语义字段一个都不许不同。
 * 未验证：流式调用（`Runner.run_streamed` / `stream_response`——适配层直接报错，不做静默丢事件）、
   真实模型（本轮全程离线剧本模型，零成本）、handoffs / guardrails / MCP / 会话持久化等 Agents SDK
   特性、多 Agent 协作与并行工具调用、以及上面那条自定义 `failure_error_function` 的失败识别。
@@ -412,10 +419,10 @@ my-agent = "my_package.agent:agent_spec"
 | SDK 单元 | `sdk/tests/` | 协议模型与策略解析、脱敏规则、序列化健壮性、录制链路的不抛异常保证、回放引擎的框架无关部分 |
 | 服务端 | `server/tests/` | 入库与去重、脱敏、API 契约、差异计算、断言求值、用例执行 |
 | 端到端 | `examples/langgraph_sre_agent/tests/` | 真实 LangGraph Agent 跑完"录制 -> 复现 -> 回归 -> 对比 -> 用例"整条链路 |
-| 端到端（第二框架） | `examples/openai_agents_sre_agent/tests/` | 同一套闭环在 OpenAI Agents SDK 上重跑，并做跨框架对比：两个框架录出来的行为内容逐字段一致、同一份录制用两个适配层回放得到同一结论 |
+| 端到端（第二框架） | `examples/openai_agents_sre_agent/tests/` | 同一套闭环在 OpenAI Agents SDK 上重跑，并做跨框架对比：两个框架录出的**行为指纹**（语义内容）一致；同一份录制用两个适配层回放，行为指纹与最终产出都相等，且差异只落在框架外壳与运行身份字段上 |
 
 **最重要的一条是复现模式的确定性测试。** 它断言除时间戳、ID 与 `effect_source` 外，
-回放与父 Run 的行为内容逐字段一致。这条过不了，后面所有能力都不成立。
+回放与父 Run 的**语义内容（行为指纹）与最终产出**一致。这条过不了，后面所有能力都不成立。
 
 端到端测试刻意用真实的 LangGraph Agent 与真实的 mock 工具，而不是打桩的假流程，
 因为回放要验证的恰恰是框架交互这一层。
@@ -429,7 +436,7 @@ my-agent = "my_package.agent:agent_spec"
 
 | 项 | 说明 | 影响 |
 | --- | --- | --- |
-| 框架适配层有两条路径经过验证，但不覆盖全部调用形态 | 回放核心的框架无关性已由第二个框架（OpenAI Agents SDK）的离线闭环支撑：两个框架录出的行为内容逐字一致，同一份录制用两个适配层回放得到同一结论（第 8 节「这条边界验证到哪一层」）。**流式调用、真实模型、handoffs / guardrails / MCP、自定义 `failure_error_function` 的失败识别都还没验证过** | 未验证的那几面接入时仍可能暴露新的抽象缺口；这类缺口一旦出现，按本轮的处置方式修实现并补会真变红的测试 |
+| 框架适配层有两条路径经过验证，但不覆盖全部调用形态 | 回放核心的框架无关性已由第二个框架（OpenAI Agents SDK）的离线闭环支撑：两个框架录出的**行为指纹**（语义内容）一致；同一份录制用两个适配层回放，行为指纹与最终产出相等，差异只落在框架消息外壳与运行身份字段（第 8 节「这条边界验证到哪一层」）。**流式调用、真实模型、handoffs / guardrails / MCP、自定义 `failure_error_function` 的失败识别都还没验证过** | 未验证的那几面接入时仍可能暴露新的抽象缺口；这类缺口一旦出现，按本轮的处置方式修实现并补会真变红的测试 |
 | 回放中间状态全在内存 | 超大运行的回放可能吃紧 | 长任务场景需要评估落盘 |
 | 预算只到「单批」这一层 | 单次回放与整批都可声明上限（整批按剩余额度逐格执行、触顶的格子如实标注未启动），但没有跨批次的预算池 / 配额 | 跨团队或长期运行的配额分配需要另做，不是当前能力 |
 | Diff 未缓存 | 每次请求重新计算 | 运行很大时响应变慢 |

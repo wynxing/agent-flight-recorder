@@ -10,8 +10,14 @@
 * 预算在工具步骤上触顶时同样要保留 budget_exceeded——异常是被框架包过一层之后
   才到边界的，成因必须从异常链里恢复出来。
 
-这两条对应 sdk/agent_flight_recorder/replay/openai_agents_adapter.py 里的失败通道替换
-与 replay/boundary.py 的成因恢复：把任一处改回旧行为，对应测试都会红。
+它们由三层共同保证，且**任何单独一层都不是唯一的承重点**（这正是刻意的纵深）：
+引擎在步边界把判定记在会话上（`ReplaySession.incomplete_reason`）→ 适配层在 Runner
+返回后再检查一次 → 边界层从异常链或会话状态恢复成因。
+
+实测（见本轮 PR 的反证表）：单独关掉异常链恢复（`_cause_in_chain`）或单独关掉会话兜底，
+这两条仍然是绿的——另一条会把成因接住；把两个恢复环节同时关掉，它们才变红。
+因此每一层的**单元级**守卫放在 sdk/tests/test_replay_adapters.py 里（关掉链恢复 2 红、
+关掉会话兜底 1 红），本文件守的是端到端可观察的结论。
 """
 
 from __future__ import annotations
@@ -147,8 +153,11 @@ def _parent_missing_one_tool_result(run_id: str):
 def test_missing_recorded_tool_result_becomes_a_coded_conclusion(afr_db) -> None:
     """复现时找不到那一步的录制结果：必须给出成因码，而不是一次看似成功的运行。
 
-    这就是第二个框架暴露出来的失败通道问题：Agents SDK 默认把工具异常换成给模型看的
-    文本，回放会继续跑完并「成功」。把失败通道改回默认值，这条断言会红。
+    这是第二个框架暴露出来的失败通道问题在端到端上的落点：Agents SDK 默认把工具异常换成
+    给模型看的文本，回放会继续跑完并「成功」。
+
+    承重点不止一处（刻意纵深：会话判定 → 适配层的返回后检查 → 边界层的成因恢复），
+    因此反证要把两个恢复环节同时关掉才会红——单独关掉任一条时，另一条会接住成因。
     """
 
     parent_run, events = _parent_missing_one_tool_result("missing-tool-parent")

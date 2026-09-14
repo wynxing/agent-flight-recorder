@@ -4,7 +4,7 @@
 
 当前重点：面向工具型 Agent 的本地回归调试器。固定历史工具证据，重跑模型决策，将失败变成可执行测试。
 
-新增 [pi 只读代码调查运行器](integrations/pi/README.md)：使用真实 pi coding-agent SDK，支持本地录制包、全程复现、回归与用例。它是独立 TypeScript 适配器，不由 Python 服务端启动，也不提供任意步骤恢复。LangGraph 示例仍用于离线演示。
+已有两条框架适配路径：LangGraph 与 **OpenAI Agents SDK**（各配一个离线示例 Agent，同一份场景、同一套断言）。新增 [pi 只读代码调查运行器](integrations/pi/README.md)：使用真实 pi coding-agent SDK，支持本地录制包、全程复现、回归与用例。它是独立 TypeScript 适配器，不由 Python 服务端启动，也不提供任意步骤恢复。
 
 [![CI](https://github.com/wynxing/agent-flight-recorder/actions/workflows/ci.yml/badge.svg)](https://github.com/wynxing/agent-flight-recorder/actions/workflows/ci.yml)
 
@@ -104,6 +104,19 @@ recorder.finish(result=result["messages"][-1].content)
 recorder.close()   # 短生命周期脚本必须显式关闭，否则缓冲区里的事件会丢
 ```
 
+**OpenAI Agents SDK 用同一套录制与回放能力**（接入点不同，因此不是换个导入名）：那边没有中间件可挂，
+接管的是 `Agent.model`（实现 Model 协议）与每个 `FunctionTool.on_invoke_tool`：
+
+```python
+from agent_flight_recorder.openai_agents import instrument_agent
+
+agent = Agent(name="my-agent", instructions=PROMPT, model=model, tools=my_tools)
+await Runner.run(instrument_agent(agent, recorder, tool_side_effects={...}), task)
+```
+
+平台按 Agent 自己声明的 `AgentSpec.runtime`（`langgraph` 默认 / `openai-agents`）选适配层回放，
+服务端不认识任何具体框架。两个框架已验证到哪一层、还剩哪些未验证面，见 [架构设计](docs/architecture.md) 第 8 节。
+
 录制链路永远不向上抛异常。上报失败只会记在 `recorder.stats` 里，不会打断或拖慢被观测的 Agent。
 想确认链路真的通，用一次真实往返自检，而不是检查配置文件是否存在：
 
@@ -163,6 +176,12 @@ LangGraph 分叉点之前的模型与工具调用使用录制结果；普通节�
 
 ### 平台做不到什么
 
+**框架适配的验证边界（已交付到哪一层）**：LangGraph 与 OpenAI Agents SDK 两条路径都跑通了「录制 → 复现 →
+回归 → 对比 → 用例」的离线闭环，并且同一份录制用两个适配层回放得到同一结论（语义内容与最终产出一致，
+差异只落在框架自己的消息外壳与运行身份字段上）。**没有**验证的面：流式调用（`Runner.run_streamed` /
+`stream_response`，适配层直接报错而不是静默丢事件）、真实模型（两个示例都走离线剧本模型）、handoffs /
+guardrails / MCP / 会话持久化、并行工具调用，以及 Agent 自定义 `failure_error_function` 时的失败识别。
+
 - **上游漂移**：provider 会下线模型版本、alias 会指向新权重，"精确复现"在 live 路径下物理上不可能。要精确复现就用复现模式。
 - **时间的不可复现**：依赖"当前时间"的工具在回放中会得到不同结果，除非工具自身支持注入时钟。
 - **外部状态漂移**：即便工具结果是录制的，外部世界已经改变，因此 dry_run 的"本应做什么"不等于"当时做了什么"。
@@ -172,10 +191,11 @@ LangGraph 分叉点之前的模型与工具调用使用录制结果；普通节�
 
 | 目录 | 内容 |
 | --- | --- |
-| `sdk/` | Python SDK：录制器、LangChain 中间件、回放引擎、OTel 导出 |
+| `sdk/` | Python SDK：录制器、LangChain / OpenAI Agents SDK 两套接入层、回放引擎与框架适配层、OTel 导出 |
 | `server/` | FastAPI 服务端：入库、脱敏、回放调度、Diff、用例执行 |
 | `web/` | Vue 3 控制台：运行记录、时间线、回放面板、差异对比、回归用例 |
 | `examples/langgraph_sre_agent/` | 示例 Agent，同时也是回放能力的真实被测对象 |
+| `examples/openai_agents_sre_agent/` | 第二个框架的示例 Agent（OpenAI Agents SDK），与上一行同场景，用来验证回放内核框架无关 |
 | `docs/` | 见下方「文档」一节 |
 | `scripts/` | `dev.ps1` 与 `test.ps1` |
 | `integrations/pi/` | pi SDK 本地运行器、固定提交调查任务、跨语言协议测试 |

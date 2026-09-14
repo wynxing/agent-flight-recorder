@@ -6,8 +6,13 @@
     Agents SDK(默认)   工具异常被换成一句给模型看的文本 -> 一切照常往下跑
 
 因此录制侧要识别「这一次返回其实是框架把异常换成的文本」，回放的真实执行侧要把它
-当成失败。两条都配了会真变红的断言：把 openai_agents.sdk_converted_a_failure 的
-判定去掉，或把回放适配层的判定去掉，这里就会红。
+当成失败。承重的就是这一处判定：**把 `openai_agents.sdk_converted_a_failure` 改成恒
+`False`，本文件 3 条一起红**（录制侧识别不到失败、真实执行的失败被当成成功、非法参数
+被当成正常工具输出）。
+
+注意不要把它写成「失败通道替换」承重：适配层曾经把 `set_function_tool_failure_error_function`
+改成「原样抛出」，但实测那条改法并不承重（标记识别已经覆盖同一批场景），因此已经删掉，
+这里也不再引用那个机制。
 """
 
 from __future__ import annotations
@@ -284,8 +289,9 @@ def test_malformed_tool_arguments_fail_the_replay_instead_of_fabricating_a_resul
     """模型给出的参数不是合法 JSON：回放必须失败，而不是编一条工具输出继续跑。
 
     框架默认把这类失败也换成「An error occurred while parsing tool arguments...」交给
-    模型继续跑。回放里那样等于凭空造出一条从未录制过的工具输出，因此适配层把这条
-    失败通道换成「原样抛出」。改成默认值，这条断言会红。
+    模型继续跑——回放里那样等于凭空造出一条从未录制过的工具输出。识别它靠的是
+    `sdk_converted_a_failure`（框架留下标记），把那个判定去掉这条会红（与另外两条一起，
+    共 3 红）。
     """
 
     parent, events = _parent_recording()
