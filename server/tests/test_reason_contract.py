@@ -84,6 +84,26 @@ def test_most_significant_picks_the_most_fundamental_cause() -> None:
     assert most_significant([]) is None
 
 
+def test_side_effect_blocked_wins_over_budget_exceeded_when_both_hold() -> None:
+    """预算触顶与被闸门拦下同时成立时，取的是 side_effect_blocked。
+
+    这件事由 CAUSE_PRECEDENCE 的**取值**决定（SIDE_EFFECT_BLOCKED=9 小于
+    BUDGET_EXCEEDED=10，而 most_significant 取最小的那个），与它在字典里的顺序、
+    以及调用方传参的顺序都无关。第 8 轮的真实模型任务集里有一个任务问的正是这件事
+    （integrations/pi/validation/failure-suite.json），因此这里把实际行为钉住。
+
+    注意：reasons.py 中 BUDGET_EXCEEDED 上方那句注释说预算「更根本」，与这两个取值
+    并不一致。这里钉的是代码的实际行为，没有顺手改实现——改它会改变已发布行为，属于
+    单独一轮的范围（见本轮 PR 的 Risk 一节）。
+    """
+
+    budget = InconclusiveReason.from_code(InconclusiveCode.BUDGET_EXCEEDED.value, "预算触顶")
+    blocked = InconclusiveReason.from_code(InconclusiveCode.SIDE_EFFECT_BLOCKED.value, "被闸门拦下")
+    assert most_significant([budget, blocked]) is blocked
+    assert most_significant([blocked, budget]) is blocked
+    assert most_significant([blocked]) is blocked
+
+
 # ---------------------------------------------------------------- 真实能力表
 
 #: 文档里用来标注「这一侧只做兼容解析、没有产生路径」的固定短语。
@@ -169,6 +189,7 @@ PI_PRODUCTION_SITES: dict[str, str] = {
     "missing_recorded_response": "integrations/pi/src/core.ts",
     "model_context_changed": "integrations/pi/src/runner.ts",
     "final_output_changed": "integrations/pi/src/runner.ts",
+    "budget_exceeded": "integrations/pi/src/runner.ts",
     "unknown": "integrations/pi/src/runner.ts",
 }
 

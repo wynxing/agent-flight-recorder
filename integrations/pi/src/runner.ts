@@ -9,15 +9,65 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { clone, canonical, confined, rejectLinks, worktreeRoot, Incomplete, Tape, modelText, type Bundle, type Step } from './core.ts';
+import { BudgetLedger, isDeclared, stopDetail, type BudgetSpec } from './budget.ts';
 import { cause } from './reasons.ts';
 
 export interface RunOptions {
   bundle: Bundle; parent?: Bundle; root?: string; authPath?: string; modelsPath?: string;
   maxModels?: number; maxTools?: number; timeoutMs?: number;
+  /**
+   * 这次执行的声明上限（`max_model_calls` / `max_cost_usd`，与 Python 侧的
+   * `ReplayBudget` 同名同义）。批量套件会把「整批剩下的额度」分给每一格传进来。
+   * 不声明时行为与加这套能力之前逐字一致。
+   */
+  budget?: BudgetSpec | null;
   /** Regress only. `snapshot` re-runs read-only tools against the pinned checkout instead of the tape. */
   toolSource?: 'recorded' | 'snapshot';
   // Dependency injection for offline SDK contract tests; never exposed by the CLI.
   stream?: (...args: any[]) => any;
+}
+
+/**
+ * 模型配置里的凭证引用是否是活的。缺凭证要当场说清楚，不能让它退化成一个「跑完了、
+ * 但结论是在没有真实模型的情况下得出的」数字——那正是本项目最不能接受的那种结论。
+ */
+export async function assertProviderCredentials(modelsPath: string): Promise<void> {
+  const config = JSON.parse(await readFile(modelsPath, 'utf8'));
+  const missing: string[] = [];
+  for (const [name, provider] of Object.entries<any>(config.providers ?? {})) {
+    const apiKey = provider?.apiKey;
+    if (typeof apiKey !== 'string' || !apiKey.startsWith('$')) continue;
+    if (!process.env[apiKey.slice(1)]) missing.push(`${name}: ${apiKey}`);
+  }
+  if (missing.length) {
+    throw new Error(
+      `缺少凭证，真实调用没有开始（未设置的环境变量：${missing.join('、')}）。` +
+      '请先把网关密钥放进进程环境变量再运行；不要把凭证明文写进仓库、配置或测试。',
+    );
+  }
+}
+
+/**
+ * 把一个 provider/model 解析成实际会被调用的模型定义（**不发起任何调用**）。
+ * 免费的自检：模型不在配置里、配置写错、provider 名字打错，都在花钱之前暴露出来。
+ */
+export async function resolveModelInfo(options: {authPath?: string; modelsPath?: string; provider: string; model: string}) {
+  const scratch = await mkdtemp(path.join(os.tmpdir(),'msee-pi-resolve-'));
+  try {
+    const runtime = await ModelRuntime.create({
+      authPath: options.authPath ?? path.join(scratch,'auth.json'),
+      modelsPath: options.modelsPath ?? null,
+      modelsStorePath: path.join(scratch,'models-store.json'),
+      refreshOnCreate: false, allowModelNetwork: false,
+    });
+    const model = runtime.getModel(options.provider, options.model) as any;
+    if (!model) return undefined;
+    return {id:model.id,provider:model.provider,api:model.api,baseUrl:model.baseUrl,
+      cost:model.cost??null,contextWindow:model.contextWindow??null,maxTokens:model.maxTokens??null};
+  } finally {
+    if (path.dirname(scratch)===os.tmpdir() && path.basename(scratch).startsWith('msee-pi-resolve-'))
+      await rm(scratch,{recursive:true,force:true});
+  }
 }
 
 /**
@@ -65,6 +115,28 @@ export async function run(options: RunOptions): Promise<Bundle> {
   const toolsTape = new Tape((parent?.steps ?? []).filter(s=>s.kind==='tool_call'));
   let fatal: Error | undefined;
   let models = 0, tools = 0;
+  // 声明的上限只约束真实发生的模型调用；读取录制结果的步骤既不花成本也不占次数。
+  // 声明之后，调用次数这一维取「声明值」与「--max-models 安全上限」里更紧的那个，
+  // 记账只走账本一处；不声明时下面是原来的那条老路，一字未改。
+  const declared = isDeclared(options.budget) ? (options.budget as BudgetSpec) : null;
+  const effective: BudgetSpec | null = declared
+    ? {
+        max_model_calls: Math.min(
+          declared.max_model_calls ?? Number.POSITIVE_INFINITY,
+          options.maxModels ?? 20,
+        ),
+        max_cost_usd: declared.max_cost_usd ?? null,
+      }
+    : null;
+  const ledger = new BudgetLedger(effective);
+  /** 一次已完成调用的成本；拿不到用量就是「未知」，不是 0。 */
+  const costOf = (message: any): number | null => {
+    // 失败/中止的那次调用没有可用的用量记录：按「未知」记，不按 0 记（0 会把一次
+    // 真实的支出说成没花钱）。
+    if (message?.stopReason === 'error' || message?.stopReason === 'aborted') return null;
+    const total = message?.usage?.cost?.total;
+    return typeof total === 'number' && Number.isFinite(total) ? total : null;
+  };
   let session: Awaited<ReturnType<typeof createAgentSession>>['session'] | undefined;
   const aborter = new AbortController();
   const timer = setTimeout(()=>{
@@ -146,7 +218,21 @@ export async function run(options: RunOptions): Promise<Bundle> {
       // Pi appends the physical cwd to its base prompt. Keep the model-visible prompt
       // explicit and stable across the isolated checkout and checkout-free replay.
       context = {...context,systemPrompt:b.prompt};
-      if (++models > (options.maxModels ?? 20)) { fatal = new Error('model_budget_exceeded'); throw fatal; }
+      models += 1;
+      if (effective) {
+        // 步边界判定：这一步真要发出去之前先看账。已经发出的那次调用允许完成并记账，
+        // 这里不做预测性中断。触顶是「因上限而停」，因此落预算语义而不是执行错误。
+        const stoppedBy = ledger.exceededBy();
+        if (stoppedBy !== null) {
+          ledger.stoppedBy = stoppedBy;
+          fatal = new Incomplete(stopDetail(ledger.usage(), stoppedBy), 'budget_exceeded');
+          aborter.abort();
+          throw fatal;
+        }
+      } else if (models > (options.maxModels ?? 20)) {
+        fatal = new Error('model_budget_exceeded');
+        throw fatal;
+      }
       const input = modelInput(context);
       const output = createAssistantMessageEventStream();
       const start = performance.now();
@@ -170,12 +256,16 @@ export async function run(options: RunOptions): Promise<Bundle> {
             if (event.type==='done'||event.type==='error') {
               const message=event.type==='done'?event.message:event.error;
               b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start,source:'live'});
+              if (effective) ledger.noteModelCall(costOf(message));
               recorded=true;
             }
             output.push(event);
           }
           const message=await stream.result();
-          if(!recorded) b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start,source:'live'});
+          if(!recorded) {
+            b.steps.push({kind:'model_call',name:`${b.provider}/${b.model}`,input,output:clone(message),duration_ms:performance.now()-start,source:'live'});
+            if (effective) ledger.noteModelCall(costOf(message));
+          }
           output.end(message);
         } catch(e) {
           fatal=e instanceof Error ? e : new Error(String(e));
@@ -206,11 +296,18 @@ export async function run(options: RunOptions): Promise<Bundle> {
     b.verdict=err instanceof Incomplete ? 'inconclusive' : 'error';
     // 成因结构化：码与说明分开，不再把整句散文塞进 reason 充当码。
     b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);
-    b.status=/cancelled|budget_exceeded/.test(err.message) ? 'aborted':'failed';
+    // 「中止」的判据看**成因码**，不再只认字符串里有没有 budget_exceeded：声明的预算触顶
+    // 走的是结构化成因，说明文本是给人看的中文，文本里本来就不该出现机器值。
+    const budgetStop = err instanceof Incomplete
+      ? err.cause.code === 'budget_exceeded'
+      : /cancelled|budget_exceeded/.test(err.message);
+    b.status=budgetStop ? 'aborted':'failed';
   } finally {
     clearTimeout(timer);process.off('SIGINT',interrupt);
     if(previousOffline===undefined)delete process.env.PI_OFFLINE;else process.env.PI_OFFLINE=previousOffline;
     session?.dispose();
+    // 记账与结论一起返回：只有声明了上限的执行才有这个对象。
+    if (effective) b.budget = ledger.usage();
     b.toolSource = b.mode === 'reproduce' ? 'recorded' : toolSource;
     b.ended=new Date().toISOString();
     // Only this uniquely generated, verified temp child belongs to this invocation.

@@ -8,6 +8,7 @@
     "start": "tsx src/cli.ts",
     "validate": "tsx src/validate.ts",
     "audit": "tsx src/audit.ts",
+    "summarize": "tsx src/summarize.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

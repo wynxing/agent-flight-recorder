@@ -1,0 +1,1230 @@
+{
+  "dir": "artifacts\\round8-replication",
+  "suite": "validation\\failure-suite.json",
+  "commit": "b5332540bd702f789088aa90603cc7dd5d1084ed",
+  "perTask": [
+    {
+      "task": "batch-budget-total-calls",
+      "answer": 2,
+      "baseline": {
+        "samples": 3,
+        "passed": 0,
+        "failed": 3,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "wrong_answer": 2,
+          "bad_evidence": 1
+        },
+        "modelCalls": 10,
+        "tokens": 147259,
+        "costUsd": 0.01646,
+        "costUnknown": false
+      },
+      "grounded": {
+        "samples": 3,
+        "passed": 1,
+        "failed": 2,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "pass": 1,
+          "wrong_answer": 2
+        },
+        "modelCalls": 21,
+        "tokens": 482788,
+        "costUsd": 0.026078,
+        "costUnknown": false
+      }
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "answer": "side_effect_blocked",
+      "baseline": {
+        "samples": 3,
+        "passed": 3,
+        "failed": 0,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "pass": 3
+        },
+        "modelCalls": 14,
+        "tokens": 123744,
+        "costUsd": 0.010874,
+        "costUnknown": false
+      },
+      "grounded": {
+        "samples": 3,
+        "passed": 3,
+        "failed": 0,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "pass": 2,
+          "format_only": 1
+        },
+        "modelCalls": 22,
+        "tokens": 237600,
+        "costUsd": 0.013136,
+        "costUnknown": false
+      }
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "answer": false,
+      "baseline": {
+        "samples": 3,
+        "passed": 0,
+        "failed": 3,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "bad_evidence": 3
+        },
+        "modelCalls": 12,
+        "tokens": 94896,
+        "costUsd": 0.008799,
+        "costUnknown": false
+      },
+      "grounded": {
+        "samples": 3,
+        "passed": 2,
+        "failed": 1,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "bad_evidence": 1,
+          "pass": 1,
+          "format_only": 1
+        },
+        "modelCalls": 19,
+        "tokens": 204078,
+        "costUsd": 0.011765,
+        "costUnknown": false
+      }
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "answer": false,
+      "baseline": {
+        "samples": 3,
+        "passed": 1,
+        "failed": 2,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "pass": 1,
+          "bad_evidence": 2
+        },
+        "modelCalls": 8,
+        "tokens": 30702,
+        "costUsd": 0.005679,
+        "costUnknown": false
+      },
+      "grounded": {
+        "samples": 3,
+        "passed": 2,
+        "failed": 1,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "pass": 2,
+          "bad_evidence": 1
+        },
+        "modelCalls": 17,
+        "tokens": 185507,
+        "costUsd": 0.012233,
+        "costUnknown": false
+      }
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "answer": "missing_recorded_response",
+      "baseline": {
+        "samples": 3,
+        "passed": 1,
+        "failed": 2,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "bad_evidence": 2,
+          "pass": 1
+        },
+        "modelCalls": 14,
+        "tokens": 120672,
+        "costUsd": 0.009159,
+        "costUnknown": false
+      },
+      "grounded": {
+        "samples": 3,
+        "passed": 3,
+        "failed": 0,
+        "inconclusive": 0,
+        "error": 0,
+        "determinable": 3,
+        "kinds": {
+          "pass": 3
+        },
+        "modelCalls": 18,
+        "tokens": 230030,
+        "costUsd": 0.016601,
+        "costUnknown": false
+      }
+    }
+  ],
+  "totals": {
+    "samples": 30,
+    "records": 5,
+    "sampleModelCalls": 155,
+    "recordModelCalls": 23,
+    "tokens": 2062826,
+    "costUsd": 0.148015,
+    "costUnknown": false,
+    "verdicts": {
+      "baseline": {
+        "passed": 5,
+        "failed": 10,
+        "inconclusive": 0,
+        "error": 0
+      },
+      "grounded": {
+        "passed": 11,
+        "failed": 4,
+        "inconclusive": 0,
+        "error": 0
+      }
+    },
+    "kinds": {
+      "baseline": {
+        "wrong_answer": 2,
+        "bad_evidence": 8,
+        "pass": 5
+      },
+      "grounded": {
+        "pass": 9,
+        "wrong_answer": 2,
+        "format_only": 2,
+        "bad_evidence": 2
+      }
+    }
+  },
+  "samples": [
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.baseline.1.json",
+      "run": "d92a46bf14d24d77b5e6cd8de14287d2",
+      "parentRunId": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "modelCalls": 3,
+      "toolCalls": 6,
+      "tokens": 42004,
+      "costUsd": 0.005226,
+      "startedAt": "2026-09-14T03:46:09.930Z",
+      "endedAt": "2026-09-14T03:46:20.231Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "```json\n{\"claims\":[{\"id\":\"batch-budget-total-calls\",\"answer\":\"2\",\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":106,\"quote\":\"if limit is not None and self.model_calls_used >= limit:\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"},{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"}]}]}\n```",
+      "arm": "baseline",
+      "sample": 1,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "wrong_answer",
+      "claimAnswer": "2",
+      "cause": null
+    },
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.baseline.2.json",
+      "run": "dd0d84df650041c89c75c64f33cb3703",
+      "parentRunId": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "modelCalls": 3,
+      "toolCalls": 6,
+      "tokens": 42960,
+      "costUsd": 0.005789,
+      "startedAt": "2026-09-14T03:46:20.245Z",
+      "endedAt": "2026-09-14T03:46:32.788Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "```json\n{\n  \"claims\": [\n    {\n      \"id\": \"batch-budget-total-calls\",\n      \"answer\": \"2\",\n      \"evidence\": [\n        {\n          \"path\": \"server/afr_server/suites.py\",\n          \"line\": 493,\n          \"quote\": \"stopped_by = ledger.exceeded_by()\"\n        },\n        {\n          \"path\": \"server/afr_server/suites.py\",\n          \"line\": 500,\n          \"quote\": \"budget=ledger.remaining(),\"\n        },\n        {\n          \"path\": \"server/afr_server/suites.py\",\n          \"line\": 510,\n          \"quote\": \"_mark_not_started(item_id)\"\n        },\n        {\n          \"path\": \"sdk/agent_flight_recorder/replay/budget.py\",\n          \"line\": 106,\n          \"quote\": \"if limit is not None and self.model_calls_used >= limit:\"\n        },\n        {\n          \"path\": \"sdk/agent_flight_recorder/replay/budget.py\",\n          \"line\": 144,\n          \"quote\": \"calls = max(0, self.budget.max_model_calls - self.model_calls_used)\"\n        },\n        {\n          \"path\": \"sdk/agent_flight_recorder/replay/engine.py\",\n          \"line\": 277,\n          \"quote\": \"stopped_by = self.ledger.exceeded_by()\"\n        }\n      ]\n    }\n  ]\n}\n```\n\n说明（不作为证据）：批量在 `_run_batch` 里逐格串行执行，每格开始时取整批账本的 `ledger.exceeded_by()`；`exceeded_by` 以 `>=` 判定触顶，`remaining()` 给出 `max(0, 2 - used)`。第 1 格拿到剩余额度 2，其自身账本（同一套 `>=` 判定）在第 3 次 `LIVE` 调用前的步边界发现已用 2 ≥ 2 而停下，因此第 1 格真实发生 2 次调用；此后整批账本已用 2 ≥ 2，第 2/3/4 格均被标 `not_started` 不再启动。合计真实模型调用为 2 次。",
+      "arm": "baseline",
+      "sample": 2,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "wrong_answer",
+      "claimAnswer": "2",
+      "cause": null
+    },
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.baseline.3.json",
+      "run": "fe3559eef8bc48bf94c7763222d6a9bc",
+      "parentRunId": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "modelCalls": 4,
+      "toolCalls": 9,
+      "tokens": 62295,
+      "costUsd": 0.005445,
+      "startedAt": "2026-09-14T03:46:32.798Z",
+      "endedAt": "2026-09-14T03:46:44.590Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"batch-budget-total-calls\",\"answer\":2,\"evidence\":[{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"},{\"path\":\"server/afr_server/suites.py\",\"line\":494,\"quote\":\"if stopped_by is None:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":106,\"quote\":\"if limit is not None and self.model_calls_used >= limit:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":86,\"quote\":\"self.model_calls_used += 1\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":311,\"quote\":\"self.shared_ledger.note_model_call(cost_usd)\"}]}]}\n\n推理：批量在 `_run_batch` 里逐格串行执行，每格启动前用整批账本判定 `ledger.exceeded_by()`（suites.py:493-494）。`exceeded_by()` 用 `self.model_calls_used >= limit` 判定（budget.py:106），即「达到」就算触顶（上限 2）。每一格的账本在每次真实调用完成后 `self.model_calls_used += 1`（budget.py:86），且同一次调用会记进整批账本（engine.py:311）。第一格自身额度为「整批剩余 2」，发出第 1、2 次真实调用后账本达到 2；第 3 次调用前的步边界判定（engine.py:277）返回触顶，该格停止。此时整批账本 `model_calls_used=2`，后续第 2、3、4 格启动前 `exceeded_by()` 即为真，被标为 not_started，不再发起任何调用。故整批实际真实模型调用次数为 2。",
+      "arm": "baseline",
+      "sample": 3,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": 2,
+      "cause": null
+    },
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.grounded.1.json",
+      "run": "f2695fb0d38d4470a72388481e0cc972",
+      "parentRunId": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "modelCalls": 8,
+      "toolCalls": 11,
+      "tokens": 234417,
+      "costUsd": 0.01272,
+      "startedAt": "2026-09-14T03:46:44.604Z",
+      "endedAt": "2026-09-14T03:47:14.478Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"batch-budget-total-calls\",\"answer\":2,\"evidence\":[{\"path\":\"server/afr_server/suites.py\",\"line\":500,\"quote\":\"budget=ledger.remaining(),\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":144,\"quote\":\"calls = max(0, self.budget.max_model_calls - self.model_calls_used)\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":106,\"quote\":\"if limit is not None and self.model_calls_used >= limit:\"},{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"},{\"path\":\"server/afr_server/suites.py\",\"line\":510,\"quote\":\"_mark_not_started(item_id)\"}]}]}",
+      "arm": "grounded",
+      "sample": 1,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": 2,
+      "cause": null
+    },
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.grounded.2.json",
+      "run": "1fbbdcc43bec4bf0a47f5729bee1d319",
+      "parentRunId": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "modelCalls": 5,
+      "toolCalls": 8,
+      "tokens": 92269,
+      "costUsd": 0.006394,
+      "startedAt": "2026-09-14T03:47:14.501Z",
+      "endedAt": "2026-09-14T03:47:29.856Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"batch-budget-total-calls\",\"answer\":\"2\",\"evidence\":[{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"},{\"path\":\"server/afr_server/suites.py\",\"line\":500,\"quote\":\"budget=ledger.remaining(),\"},{\"path\":\"server/afr_server/suites.py\",\"line\":510,\"quote\":\"_mark_not_started(item_id)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":106,\"quote\":\"if limit is not None and self.model_calls_used >= limit:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":107,\"quote\":\"return STOPPED_BY_MODEL_CALLS\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":144,\"quote\":\"calls = max(0, self.budget.max_model_calls - self.model_calls_used)\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":276,\"quote\":\"if plan.mode is EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"}]}]}",
+      "arm": "grounded",
+      "sample": 2,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "wrong_answer",
+      "claimAnswer": "2",
+      "cause": null
+    },
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.grounded.3.json",
+      "run": "94a954db91104f75b66cc43bf9c9e1b3",
+      "parentRunId": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "modelCalls": 8,
+      "toolCalls": 13,
+      "tokens": 156102,
+      "costUsd": 0.006964,
+      "startedAt": "2026-09-14T03:47:29.867Z",
+      "endedAt": "2026-09-14T03:47:52.428Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"batch-budget-total-calls\",\"answer\":\"2\",\"evidence\":[{\"path\":\"server/afr_server/suites.py\",\"line\":485,\"quote\":\"ledger = BudgetLedger(budget)\"},{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"},{\"path\":\"server/afr_server/suites.py\",\"line\":500,\"quote\":\"budget=ledger.remaining(),\"},{\"path\":\"server/afr_server/suites.py\",\"line\":510,\"quote\":\"_mark_not_started(item_id)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":106,\"quote\":\"if limit is not None and self.model_calls_used >= limit:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":144,\"quote\":\"calls = max(0, self.budget.max_model_calls - self.model_calls_used)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":86,\"quote\":\"self.model_calls_used += 1\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":276,\"quote\":\"if plan.mode is EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":309,\"quote\":\"self.ledger.note_model_call(cost_usd)\"}]}]}",
+      "arm": "grounded",
+      "sample": 3,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "wrong_answer",
+      "claimAnswer": "2",
+      "cause": null
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.baseline.1.json",
+      "run": "b9401935aea94ff782466389769777bc",
+      "parentRunId": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": 36624,
+      "costUsd": 0.003817,
+      "startedAt": "2026-09-14T03:47:52.450Z",
+      "endedAt": "2026-09-14T03:48:06.478Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":363,\"quote\":\"causes.append(result.reason or InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"}]}]}",
+      "arm": "baseline",
+      "sample": 1,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "side_effect_blocked",
+      "cause": null
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.baseline.2.json",
+      "run": "ca1fe67e1d8e49d28889e6d520804e44",
+      "parentRunId": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "modelCalls": 6,
+      "toolCalls": 7,
+      "tokens": 53944,
+      "costUsd": 0.003988,
+      "startedAt": "2026-09-14T03:48:06.489Z",
+      "endedAt": "2026-09-14T03:48:24.142Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":363,\"quote\":\"causes.append(result.reason or InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"}]}]}",
+      "arm": "baseline",
+      "sample": 2,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "side_effect_blocked",
+      "cause": null
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.baseline.3.json",
+      "run": "c85244cebca54ecc90b724f6c5722b6d",
+      "parentRunId": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": 33176,
+      "costUsd": 0.003069,
+      "startedAt": "2026-09-14T03:48:24.153Z",
+      "endedAt": "2026-09-14T03:48:33.815Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"},{\"path\":\"server/afr_server/cases.py\",\"line\":367,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"}]}]}",
+      "arm": "baseline",
+      "sample": 3,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "side_effect_blocked",
+      "cause": null
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.grounded.1.json",
+      "run": "a77fe938a6584bf3b244b2878ee584f6",
+      "parentRunId": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "modelCalls": 6,
+      "toolCalls": 7,
+      "tokens": 42014,
+      "costUsd": 0.003146,
+      "startedAt": "2026-09-14T03:48:33.826Z",
+      "endedAt": "2026-09-14T03:48:46.585Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"},{\"path\":\"server/afr_server/cases.py\",\"line\":366,\"quote\":\"InconclusiveReason.from_code(\"},{\"path\":\"server/afr_server/cases.py\",\"line\":367,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value,\"},{\"path\":\"server/afr_server/cases.py\",\"line\":358,\"quote\":\"if not result.complete:\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"}]}]}",
+      "arm": "grounded",
+      "sample": 1,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "side_effect_blocked",
+      "cause": null
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.grounded.2.json",
+      "run": "34f56ac3b7f54b2dbe305aa5802a1a57",
+      "parentRunId": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "modelCalls": 8,
+      "toolCalls": 12,
+      "tokens": 117994,
+      "costUsd": 0.005782,
+      "startedAt": "2026-09-14T03:48:46.598Z",
+      "endedAt": "2026-09-14T03:49:10.521Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"server/afr_server/cases.py\",\"line\":352,\"quote\":\"intercepted = [\"},{\"path\":\"server/afr_server/cases.py\",\"line\":358,\"quote\":\"and (event.attributes or {}).get(ATTR_GATE) == ATTR_GATE\"},{\"path\":\"server/afr_server/cases.py\",\"line\":363,\"quote\":\"causes.append(result.reason or InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":365,\"quote\":\"causes.append(\"},{\"path\":\"server/afr_server/cases.py\",\"line\":367,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value,\"},{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"}]}]}",
+      "arm": "grounded",
+      "sample": 2,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "side_effect_blocked",
+      "cause": null
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.grounded.3.json",
+      "run": "f9bbd7d4a8a742599d60fd0c189b0bdb",
+      "parentRunId": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "modelCalls": 8,
+      "toolCalls": 12,
+      "tokens": 77592,
+      "costUsd": 0.004208,
+      "startedAt": "2026-09-14T03:49:10.537Z",
+      "endedAt": "2026-09-14T03:49:30.597Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "```json\n{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"server/afr_server/cases.py\",\"line\":362,\"quote\":\"if not result.complete:\"},{\"path\":\"server/afr_server/cases.py\",\"line\":363,\"quote\":\"causes.append(result.reason or InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":364,\"quote\":\"if intercepted:\"},{\"path\":\"server/afr_server/cases.py\",\"line\":367,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value,\"},{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"}]}]}\n```",
+      "arm": "grounded",
+      "sample": 3,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "format_only",
+      "claimAnswer": "side_effect_blocked",
+      "cause": null
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.baseline.1.json",
+      "run": "a5d4bc60238f45ec8f697239b28d4998",
+      "parentRunId": "3d078925f96b40ecb6ee27585104c17c",
+      "modelCalls": 6,
+      "toolCalls": 9,
+      "tokens": 52407,
+      "costUsd": 0.003384,
+      "startedAt": "2026-09-14T03:51:46.993Z",
+      "endedAt": "2026-09-14T03:51:58.460Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":193,\"quote\":\"const step = b.mode === 'reproduce' ? all.take('tool_call',tool.name,input) : toolsTape.take('tool_call',tool.name,input);\"}]}]}",
+      "arm": "baseline",
+      "sample": 1,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": "missing_recorded_response",
+      "cause": null
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.baseline.2.json",
+      "run": "009f789c26ad42eca1c6e66a1e4d48b6",
+      "parentRunId": "3d078925f96b40ecb6ee27585104c17c",
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": 34862,
+      "costUsd": 0.003027,
+      "startedAt": "2026-09-14T03:51:58.470Z",
+      "endedAt": "2026-09-14T03:52:07.216Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":298,\"quote\":\"b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);\"}]}]}",
+      "arm": "baseline",
+      "sample": 2,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "missing_recorded_response",
+      "cause": null
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.baseline.3.json",
+      "run": "e74d62cf0f414f7c98e9bb1139c27369",
+      "parentRunId": "3d078925f96b40ecb6ee27585104c17c",
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 33403,
+      "costUsd": 0.002748,
+      "startedAt": "2026-09-14T03:52:07.224Z",
+      "endedAt": "2026-09-14T03:52:15.070Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/core.ts\",\"line\":64,\"quote\":\"throw new Incomplete(\"},{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"}]}]}",
+      "arm": "baseline",
+      "sample": 3,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": "missing_recorded_response",
+      "cause": null
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.grounded.1.json",
+      "run": "89a0411d74334378bd13b90c7f9bdd48",
+      "parentRunId": "3d078925f96b40ecb6ee27585104c17c",
+      "modelCalls": 5,
+      "toolCalls": 7,
+      "tokens": 59283,
+      "costUsd": 0.004588,
+      "startedAt": "2026-09-14T03:52:15.080Z",
+      "endedAt": "2026-09-14T03:52:36.315Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/runner.ts\",\"line\":193,\"quote\":\"const step = b.mode === 'reproduce' ? all.take('tool_call',tool.name,input) : toolsTape.take('tool_call',tool.name,input);\"},{\"path\":\"integrations/pi/src/core.ts\",\"line\":65,\"quote\":\"throw new Incomplete(\"},{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":210,\"quote\":\"if (e instanceof Incomplete) { fatal=e; aborter.abort(); }\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":292,\"quote\":\"const err=fatal ?? (e instanceof Error ? e : new Error(String(e)));\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":298,\"quote\":\"b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);\"}]}]}",
+      "arm": "grounded",
+      "sample": 1,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "missing_recorded_response",
+      "cause": null
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.grounded.2.json",
+      "run": "ec08067a74b04c5bbb8fa5d804f5b69e",
+      "parentRunId": "3d078925f96b40ecb6ee27585104c17c",
+      "modelCalls": 6,
+      "toolCalls": 9,
+      "tokens": 70972,
+      "costUsd": 0.006315,
+      "startedAt": "2026-09-14T03:52:36.323Z",
+      "endedAt": "2026-09-14T03:53:02.330Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/runner.ts\",\"line\":193,\"quote\":\"const step = b.mode === 'reproduce' ? all.take('tool_call',tool.name,input) : toolsTape.take('tool_call',tool.name,input);\"},{\"path\":\"integrations/pi/src/core.ts\",\"line\":63,\"quote\":\"if (!step || step.kind !== kind || (name !== undefined && step.name !== name) ||\"},{\"path\":\"integrations/pi/src/core.ts\",\"line\":64,\"quote\":\"(input !== undefined && canonical(step.input) !== canonical(input))) {\"},{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":210,\"quote\":\"if (e instanceof Incomplete) { fatal=e; aborter.abort(); }\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":292,\"quote\":\"const err=fatal ?? (e instanceof Error ? e : new Error(String(e)));\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":298,\"quote\":\"b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);\"}]}]}",
+      "arm": "grounded",
+      "sample": 2,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "missing_recorded_response",
+      "cause": null
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.grounded.3.json",
+      "run": "341739275ab14e3b956ace6cd91273ea",
+      "parentRunId": "3d078925f96b40ecb6ee27585104c17c",
+      "modelCalls": 7,
+      "toolCalls": 10,
+      "tokens": 99775,
+      "costUsd": 0.005698,
+      "startedAt": "2026-09-14T03:53:02.342Z",
+      "endedAt": "2026-09-14T03:53:24.653Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":193,\"quote\":\"const step = b.mode === 'reproduce' ? all.take('tool_call',tool.name,input) : toolsTape.take('tool_call',tool.name,input);\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":210,\"quote\":\"if (e instanceof Incomplete) { fatal=e; aborter.abort(); }\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":292,\"quote\":\"const err=fatal ?? (e instanceof Error ? e : new Error(String(e)));\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":298,\"quote\":\"b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);\"}]}]}",
+      "arm": "grounded",
+      "sample": 3,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": "missing_recorded_response",
+      "cause": null
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.baseline.1.json",
+      "run": "5036d15032a94148b20db0b1e7c8e2d2",
+      "parentRunId": "315fd4952bad4041a1be14a87e51fa98",
+      "modelCalls": 2,
+      "toolCalls": 2,
+      "tokens": 6816,
+      "costUsd": 0.001432,
+      "startedAt": "2026-09-14T03:50:43.417Z",
+      "endedAt": "2026-09-14T03:50:48.310Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":96,\"quote\":\"return None if self._cost_unknown else round(self._cost, 6)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":108,\"quote\":\"cost = self.cost_used_usd\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":147,\"quote\":\"cost = max(0.0, round(self.budget.max_cost_usd - self.cost_used_usd, 6))\"}]}]}",
+      "arm": "baseline",
+      "sample": 1,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.baseline.2.json",
+      "run": "43f91cdd3bad4d82891a2823094b63a6",
+      "parentRunId": "315fd4952bad4041a1be14a87e51fa98",
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "tokens": 7956,
+      "costUsd": 0.002633,
+      "startedAt": "2026-09-14T03:50:48.315Z",
+      "endedAt": "2026-09-14T03:50:58.068Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":96,\"quote\":\"return None if self._cost_unknown else round(self._cost, 6)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":111,\"quote\":\"return STOPPED_BY_COST\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":146,\"quote\":\"if self.budget.max_cost_usd is not None and self.cost_used_usd is not None:\"}]}]}",
+      "arm": "baseline",
+      "sample": 2,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.baseline.3.json",
+      "run": "ab853c66777a49a0b51309a716c072d2",
+      "parentRunId": "315fd4952bad4041a1be14a87e51fa98",
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 15930,
+      "costUsd": 0.001614,
+      "startedAt": "2026-09-14T03:50:58.076Z",
+      "endedAt": "2026-09-14T03:51:07.067Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":108,\"quote\":\"cost = self.cost_used_usd\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":120,\"quote\":\"return None\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":146,\"quote\":\"if self.budget.max_cost_usd is not None and self.cost_used_usd is not None:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":137,\"quote\":\"成本未知时**不设成本额度**，而不是把未知当成 0：未知不是「已经花光了」，\"}]}]}",
+      "arm": "baseline",
+      "sample": 3,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.grounded.1.json",
+      "run": "955ff6267a2d472aa1d3a9bd43a2c7fa",
+      "parentRunId": "315fd4952bad4041a1be14a87e51fa98",
+      "modelCalls": 6,
+      "toolCalls": 6,
+      "tokens": 50333,
+      "costUsd": 0.003888,
+      "startedAt": "2026-09-14T03:51:07.075Z",
+      "endedAt": "2026-09-14T03:51:22.789Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":108,\"quote\":\"cost = self.cost_used_usd\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":96,\"quote\":\"return None if self._cost_unknown else round(self._cost, 6)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":87,\"quote\":\"if cost_usd is None:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":90,\"quote\":\"self._cost_unknown = True\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":146,\"quote\":\"if self.budget.max_cost_usd is not None and self.cost_used_usd is not None:\"},{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"}]}]}",
+      "arm": "grounded",
+      "sample": 1,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.grounded.2.json",
+      "run": "20d022997e24452f969d990a275e9c4d",
+      "parentRunId": "315fd4952bad4041a1be14a87e51fa98",
+      "modelCalls": 7,
+      "toolCalls": 9,
+      "tokens": 118831,
+      "costUsd": 0.006727,
+      "startedAt": "2026-09-14T03:51:22.800Z",
+      "endedAt": "2026-09-14T03:51:39.370Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":98,\"quote\":\"return None if self._cost_unknown else round(self._cost, 6)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":111,\"quote\":\"return STOPPED_BY_COST\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":146,\"quote\":\"if self.budget.max_cost_usd is not None and self.cost_used_usd is not None:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":148,\"quote\":\"return ReplayBudget(max_cost_usd=cost, max_model_calls=calls)\"}]}]}",
+      "arm": "grounded",
+      "sample": 2,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.grounded.3.json",
+      "run": "0ae3c3db86b24e20ae1004d3213ec0db",
+      "parentRunId": "315fd4952bad4041a1be14a87e51fa98",
+      "modelCalls": 4,
+      "toolCalls": 3,
+      "tokens": 16343,
+      "costUsd": 0.001618,
+      "startedAt": "2026-09-14T03:51:39.385Z",
+      "endedAt": "2026-09-14T03:51:46.985Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":108,\"quote\":\"cost = self.cost_used_usd\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":111,\"quote\":\"return STOPPED_BY_COST\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":112,\"quote\":\"return None\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":90,\"quote\":\"self._cost_unknown = True\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":96,\"quote\":\"return None if self._cost_unknown else round(self._cost, 6)\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":278,\"quote\":\"if stopped_by is not None:\"}]}]}",
+      "arm": "grounded",
+      "sample": 3,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.baseline.1.json",
+      "run": "df790f4232b145d6994dce044e8310ab",
+      "parentRunId": "cc9b8a1a5a144308bee6a783b459e34c",
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 31311,
+      "costUsd": 0.002714,
+      "startedAt": "2026-09-14T03:49:30.607Z",
+      "endedAt": "2026-09-14T03:49:39.365Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":142,\"quote\":\"def regress(cls) -> \\\"EffectPolicy\\\":\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"default=EffectMode.RECORDED,\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":155,\"quote\":\"return self.default\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":173,\"quote\":\"return EffectDecision(mode=mode)\"}]}]}",
+      "arm": "baseline",
+      "sample": 1,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.baseline.2.json",
+      "run": "a37923ed17b04e71bd58ef362868cf01",
+      "parentRunId": "cc9b8a1a5a144308bee6a783b459e34c",
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 32008,
+      "costUsd": 0.003282,
+      "startedAt": "2026-09-14T03:49:39.376Z",
+      "endedAt": "2026-09-14T03:49:50.286Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "```json\n{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":146,\"quote\":\"default=EffectMode.RECORDED,\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":170,\"quote\":\"mode = self.resolve_mode(seq=seq, kind=kind)\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":173,\"quote\":\"return EffectDecision(mode=mode)\"}]}]}\n```\n\n解释：`EffectPolicy.regress()` 只把 `by_kind[MODEL_CALL]=LIVE`，其余（含工具调用）落到 `default=RECORDED`（models.py:145-148）。副作用闸门的前置条件是 `mode is not EffectMode.LIVE`（models.py:172），而工具步骤在此模式解析出的 mode 是 `RECORDED`，故直接 `return EffectDecision(mode=mode)`（models.py:173），不会走到 `EffectMode.DRY_RUN` 降级分支——因此父 Run 里的 WRITE 写工具步骤不会被降级为 dry_run。",
+      "arm": "baseline",
+      "sample": 2,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.baseline.3.json",
+      "run": "0f838430a8db45188e595ef5786de93d",
+      "parentRunId": "cc9b8a1a5a144308bee6a783b459e34c",
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 31577,
+      "costUsd": 0.002803,
+      "startedAt": "2026-09-14T03:49:50.292Z",
+      "endedAt": "2026-09-14T03:49:59.513Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":146,\"quote\":\"default=EffectMode.RECORDED,\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"}]}]}",
+      "arm": "baseline",
+      "sample": 3,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.grounded.1.json",
+      "run": "269ce7d2a82f4e6c8a6ba093e2dd84fe",
+      "parentRunId": "cc9b8a1a5a144308bee6a783b459e34c",
+      "modelCalls": 7,
+      "toolCalls": 8,
+      "tokens": 92308,
+      "costUsd": 0.004941,
+      "startedAt": "2026-09-14T03:49:59.525Z",
+      "endedAt": "2026-09-14T03:50:15.328Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":146,\"quote\":\"default=EffectMode.RECORDED,\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":152,\"quote\":\"return self.default\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":173,\"quote\":\"return EffectDecision(mode=mode)\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":180,\"quote\":\"mode=EffectMode.DRY_RUN,\"}]}]}",
+      "arm": "grounded",
+      "sample": 1,
+      "verdict": "failed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": false
+        }
+      ],
+      "kind": "bad_evidence",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.grounded.2.json",
+      "run": "44d07267e4c045be8c719ea29a5d0d2e",
+      "parentRunId": "cc9b8a1a5a144308bee6a783b459e34c",
+      "modelCalls": 8,
+      "toolCalls": 9,
+      "tokens": 79228,
+      "costUsd": 0.003927,
+      "startedAt": "2026-09-14T03:50:15.343Z",
+      "endedAt": "2026-09-14T03:50:32.971Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":146,\"quote\":\"default=EffectMode.RECORDED,\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":173,\"quote\":\"return EffectDecision(mode=mode)\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":263,\"quote\":\"decision = self.plan.policy.resolve(seq=reference.seq, kind=kind, side_effect=side_effect)\"},{\"path\":\"sdk/agent_flight_recorder/replay/langgraph_adapter.py\",\"line\":229,\"quote\":\"if plan.mode is EffectMode.RECORDED:\"}]}]}",
+      "arm": "grounded",
+      "sample": 2,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "pass",
+      "claimAnswer": false,
+      "cause": null
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.grounded.3.json",
+      "run": "793f9de7d12a41b7be095f1a61bc9577",
+      "parentRunId": "cc9b8a1a5a144308bee6a783b459e34c",
+      "modelCalls": 4,
+      "toolCalls": 5,
+      "tokens": 32542,
+      "costUsd": 0.002897,
+      "startedAt": "2026-09-14T03:50:32.981Z",
+      "endedAt": "2026-09-14T03:50:43.411Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "```json\n{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":146,\"quote\":\"return cls(\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":170,\"quote\":\"mode = self.resolve_mode(seq=seq, kind=kind)\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":173,\"quote\":\"return EffectDecision(mode=mode)\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":263,\"quote\":\"decision = self.plan.policy.resolve(seq=reference.seq, kind=kind, side_effect=side_effect)\"}]}]}\n```",
+      "arm": "grounded",
+      "sample": 3,
+      "verdict": "passed",
+      "assertions": [
+        {
+          "type": "no_error",
+          "passed": true
+        },
+        {
+          "type": "json_claim",
+          "passed": true
+        }
+      ],
+      "kind": "format_only",
+      "claimAnswer": false,
+      "cause": null
+    }
+  ],
+  "records": [
+    {
+      "task": "batch-budget-total-calls",
+      "file": "batch-budget-total-calls.record.json",
+      "run": "a81c85ba6b6b4e2cb4dd73a85b04a20b",
+      "parentRunId": null,
+      "modelCalls": 3,
+      "toolCalls": 6,
+      "tokens": 42526,
+      "costUsd": 0.005415,
+      "startedAt": "2026-09-14T03:45:04.922Z",
+      "endedAt": "2026-09-14T03:45:16.972Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"batch-budget-total-calls\",\"answer\":\"2\",\"evidence\":[{\"path\":\"server/afr_server/suites.py\",\"line\":243,\"quote\":\"for item_id, case_id, condition in queued:\"},{\"path\":\"server/afr_server/suites.py\",\"line\":493,\"quote\":\"stopped_by = ledger.exceeded_by()\"},{\"path\":\"server/afr_server/suites.py\",\"line\":510,\"quote\":\"_mark_not_started(item_id)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":106,\"quote\":\"if limit is not None and self.model_calls_used >= limit:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":131,\"quote\":\"def remaining(self) -> ReplayBudget:\"},{\"path\":\"sdk/agent_flight_recorder/replay/engine.py\",\"line\":277,\"quote\":\"stopped_by = self.ledger.exceeded_by()\"}]}]}"
+    },
+    {
+      "task": "cause-precedence-blocked-vs-budget",
+      "file": "cause-precedence-blocked-vs-budget.record.json",
+      "run": "a7bc7f5abdbe49f2878ef4c0d2ad8cf2",
+      "parentRunId": null,
+      "modelCalls": 6,
+      "toolCalls": 8,
+      "tokens": 61109,
+      "costUsd": 0.003759,
+      "startedAt": "2026-09-14T03:45:16.986Z",
+      "endedAt": "2026-09-14T03:45:31.726Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"cause-precedence-blocked-vs-budget\",\"answer\":\"side_effect_blocked\",\"evidence\":[{\"path\":\"server/afr_server/cases.py\",\"line\":373,\"quote\":\"cause = most_significant(causes)\"},{\"path\":\"server/afr_server/cases.py\",\"line\":363,\"quote\":\"causes.append(result.reason or InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value))\"},{\"path\":\"server/afr_server/cases.py\",\"line\":367,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":181,\"quote\":\"return min(known, key=lambda cause: CAUSE_PRECEDENCE.get(cause.code, 99))\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":71,\"quote\":\"InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,\"},{\"path\":\"sdk/agent_flight_recorder/replay/reasons.py\",\"line\":73,\"quote\":\"InconclusiveCode.BUDGET_EXCEEDED.value: 10,\"}]}]}"
+    },
+    {
+      "task": "pi-tape-mismatch-code",
+      "file": "pi-tape-mismatch-code.record.json",
+      "run": "3d078925f96b40ecb6ee27585104c17c",
+      "parentRunId": null,
+      "modelCalls": 6,
+      "toolCalls": 9,
+      "tokens": 54692,
+      "costUsd": 0.003817,
+      "startedAt": "2026-09-14T03:45:47.385Z",
+      "endedAt": "2026-09-14T03:46:09.915Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"pi-tape-mismatch-code\",\"answer\":\"missing_recorded_response\",\"evidence\":[{\"path\":\"integrations/pi/src/core.ts\",\"line\":67,\"quote\":\"'missing_recorded_response',\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":210,\"quote\":\"if (e instanceof Incomplete) { fatal=e; aborter.abort(); }\"},{\"path\":\"integrations/pi/src/runner.ts\",\"line\":298,\"quote\":\"b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);\"}]}]}"
+    },
+    {
+      "task": "unknown-cost-does-not-stop",
+      "file": "unknown-cost-does-not-stop.record.json",
+      "run": "315fd4952bad4041a1be14a87e51fa98",
+      "parentRunId": null,
+      "modelCalls": 4,
+      "toolCalls": 3,
+      "tokens": 15813,
+      "costUsd": 0.001526,
+      "startedAt": "2026-09-14T03:45:39.593Z",
+      "endedAt": "2026-09-14T03:45:47.371Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"unknown-cost-does-not-stop\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":110,\"quote\":\"if cap is not None and cost is not None and cost >= cap:\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":96,\"quote\":\"return None if self._cost_unknown else round(self._cost, 6)\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":90,\"quote\":\"self._cost_unknown = True\"},{\"path\":\"sdk/agent_flight_recorder/replay/budget.py\",\"line\":145,\"quote\":\"cost = None\"}]}]}"
+    },
+    {
+      "task": "write-tool-gate-on-recorded-regress",
+      "file": "write-tool-gate-on-recorded-regress.record.json",
+      "run": "cc9b8a1a5a144308bee6a783b459e34c",
+      "parentRunId": null,
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 31410,
+      "costUsd": 0.002714,
+      "startedAt": "2026-09-14T03:45:31.740Z",
+      "endedAt": "2026-09-14T03:45:39.581Z",
+      "complete": true,
+      "status": "succeeded",
+      "answer": "{\"claims\":[{\"id\":\"write-tool-gate-on-recorded-regress\",\"answer\":false,\"evidence\":[{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":146,\"quote\":\"default=EffectMode.RECORDED,\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":147,\"quote\":\"by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":170,\"quote\":\"mode = self.resolve_mode(seq=seq, kind=kind)\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":172,\"quote\":\"if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:\"},{\"path\":\"sdk/agent_flight_recorder/models.py\",\"line\":173,\"quote\":\"return EffectDecision(mode=mode)\"}]}]}"
+    }
+  ]
+}

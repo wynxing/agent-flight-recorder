@@ -1,0 +1,14 @@
+{
+  "label": "synthetic negative control; excluded from model statistics",
+  "verdict": "failed",
+  "results": [
+    {
+      "type": "no_error",
+      "passed": true
+    },
+    {
+      "type": "json_claim",
+      "passed": false
+    }
+  ]
+}
