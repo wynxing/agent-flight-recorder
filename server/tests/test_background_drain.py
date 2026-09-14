@@ -18,6 +18,19 @@ issue #18 的成因不是产品缺陷，而是门禁自己的漏：播种线程�
 另有两条钉住「产品行为不变」：播种仍然异步、仍然不阻塞服务可用（卡住播种时健康检查照样
 回话），而 `AFR_SEED_ON_STARTUP=false` 时连线程都不起。
 
+## 这一轮收尾：等待集上剩下的三处缺口
+
+第 10 轮审核用同一把尺子（改掉实现 → 看测试是否变红）量出三处同类的残余缺口：池计数只钉了
+`cases` / `suites` 两个池、`wait_idle` 开头那次 `install()`（换上的执行器也要数得到）
+没有守护、`background.start` 的「在锁里 start」语义可以静默移除。三条各自对应一个**实测
+存活过的变异**：
+
+* `test_a_replay_pool_task_is_in_the_waiting_set`：从池计数循环里删掉 `replay_runner` → 必红；
+* `test_a_mid_test_executor_swap_is_tracked_by_the_drain`：删掉 `wait_idle` 开头那次
+  `install()` → 必红（换上的执行器从此收不到包裹，交给它的任务对 drain 是隐形的）；
+* `test_registration_and_start_have_no_gap`：把 `background.start` 的 `start()` 挪到锁外
+  → 必红（登记与开跑之间出现缝：drain 在那段窗口里读到的是空集，会说「都落地了」）。
+
 ## 等待集的两半都要有守护
 
 第 9 轮审核指出：上面这些只覆盖了登记表那一半。于是这里按「等待集的每一半 + 两条收紧 +
@@ -36,6 +49,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -52,6 +67,9 @@ SEED_GATE_DELAY_SECONDS = 0.5
 #: 放行之后，播种还要**占住**这么久才真的写库。
 #: 这一条把「换库时它还没落地」变成必然可观测的窗口，而不是赌「它没这么快跑完」。
 SEED_LANDING_SECONDS = 0.5
+#: 播种录制的分叉点。与 `test_replay_budget_api.py` 用的是同一条种子录制：从这一步起
+#: 复现模式下不需要真的调用模型（离线），因此这条回放测试不花任何模型费用。
+SEED_REPLAY_FROM_SEQ = 15
 
 
 class SeedGate:
@@ -216,6 +234,19 @@ def _create_case(client: Any, make_run: Any) -> str:
     ).json()["id"]
 
 
+def _wait_for_seeded_parent(client: Any, timeout: float = 90.0) -> dict[str, Any]:
+    """播种跑在后台：等那条已完成、自己没有父 Run 的种子录制出现（回放要拿它当父）。"""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for item in client.get("/v1/runs").json()["runs"]:
+            run = item["run"]
+            if run["parent_run_id"] is None and run["status"] == "succeeded":
+                return run
+        time.sleep(0.2)
+    raise AssertionError(f"播种未在 {timeout:.0f}s 内产出可回放的父 Run")
+
+
 def test_seed_thread_is_in_the_waiting_set(
     seed_gate: SeedGate, gated_seed_client: Any, background_work: Any
 ) -> None:
@@ -326,6 +357,99 @@ def test_a_suite_pool_task_is_in_the_waiting_set(
     assert detail["completed"] == detail["total"] == 1, f"drain 返回时格子还没有落地：{detail}"
 
 
+def test_a_replay_pool_task_is_in_the_waiting_set(
+    seeded_client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    background_work: Any,
+    pool_stall: Stall,
+) -> None:
+    """在飞的**回放池任务**也必须在等待集里：池的命名计数是三个池，不是「两个池加上顺便」。
+
+    第 9 轮只钉住了用例池与套件池：从 `install()` 的池计数循环里删掉 `replay_runner` 时
+    全量 230 条照样绿。这里走真提交路径（`POST /v1/runs/{id}/replay`）把回放池任务卡在飞的
+    状态，断言它在等待集里（点名，不是计数）、drain 不提前返回，而且返回时回放已经落在
+    **这个测试的**库里。
+    """
+
+    from afr_server import replay_runner
+
+    parent = _wait_for_seeded_parent(seeded_client)
+    # 卡住的是池里那个真任务本身：放行后照常执行，卡的只是「任务在飞」这个窗口。
+    _stall(monkeypatch, replay_runner, "_run_job", pool_stall)
+
+    response = seeded_client.post(
+        f"/v1/runs/{parent['id']}/replay",
+        json={"from_seq": SEED_REPLAY_FROM_SEQ, "preset": "reproduce"},
+    )
+    assert response.status_code == 200, response.text
+    replay_run_id = response.json()["run_id"]
+
+    assert pool_stall.entered.wait(timeout=GATE_TIMEOUT_SECONDS), "回放池任务没有开始"
+    assert any(item.startswith("线程池:replay_runner") for item in background_work.outstanding()), (
+        f"在飞的回放池任务不在等待集里：{background_work.outstanding()}"
+    )
+    assert background_work.pending.get("线程池:replay_runner") == 1, background_work.pending
+
+    _assert_drain_waits(background_work, pool_stall.release, "回放池任务")
+
+    # 落地证据：drain 返回时回放已经写在这个测试的库里，并且进了终态。
+    detail = seeded_client.get(f"/v1/runs/{replay_run_id}").json()
+    assert detail["run"]["status"] in {"succeeded", "failed", "aborted"}, detail["run"]
+
+
+def test_a_mid_test_executor_swap_is_tracked_by_the_drain(
+    client: Any,
+    make_run: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    background_work: Any,
+    pool_stall: Stall,
+) -> None:
+    """drain 开始前会重新认一次当前执行器：测试中途换上的那份也要数得到。
+
+    池那一半是「包裹 submit」得来的，所以包裹必须发生在提交**之前**才算数。测试可以中途把
+    模块级 `_executor` 换成自己的实现（`test_suites.py` 的 `_ImmediateThreads` 就是），
+    换上的那份得在下一轮 drain 开始时被认进来——这就是 `wait_idle` 开头那次 `install()`
+    的语义。少了它，从那一刻起提交给它的任务对 drain 是隐形的：`wait_idle` 会立刻说
+    「都落地了」，而换库会与那份还在飞的工作并发。
+
+    这条守护覆盖的范围要说清：它钉的是「drain 之后的提交被数到」。在包裹之前就已经提交出去、
+    还在飞的任务不在此列——那一段由「先包裹、再提交」的纪律兜着，原因见
+    `docs/architecture.md` 第 6 节。
+    """
+
+    from afr_server import cases as cases_module
+
+    # 换上一份**还没被计数包裹过**的执行器：它不是模块原来那个对象。
+    swapped = ThreadPoolExecutor(max_workers=1, thread_name_prefix="afr-case")
+    monkeypatch.setattr(cases_module, "_executor", swapped)
+    try:
+        # 先 drain 一次：这一步的语义就是「把换上的执行器认进等待集」。
+        assert background_work.wait_idle(timeout=GATE_TIMEOUT_SECONDS) == [], (
+            "上一轮还有没落地的工作"
+        )
+        assert getattr(swapped, "_afr_tracked", False) is True, (
+            "drain 没有把换上的执行器认进来：从这一刻起的提交会变成隐形工作"
+        )
+
+        case_id = _create_case(client, make_run)
+        _stall(monkeypatch, cases_module, "_execute", pool_stall)
+        cases_module.submit_case_run(case_id)
+
+        assert pool_stall.entered.wait(timeout=GATE_TIMEOUT_SECONDS), "用例池任务没有开始"
+        assert any(item.startswith("线程池:cases") for item in background_work.outstanding()), (
+            f"换上的执行器里的任务不在等待集里：{background_work.outstanding()}"
+        )
+
+        _assert_drain_waits(background_work, pool_stall.release, "换上的执行器里的用例任务")
+
+        # 落地证据：drain 返回时结论已经写在**这个测试的**库里。
+        status = client.get(f"/v1/cases/{case_id}").json()["last_status"]
+        assert status not in (None, "running"), f"drain 返回时用例还没有落地（status={status}）"
+    finally:
+        # 放掉池的等待（不 join）：就算卡住也不会把拆除拖成一轮白等的超时。
+        swapped.shutdown(wait=False)
+
+
 def test_an_unlanded_task_fails_the_swap(
     background_work: Any, background_leak: type[BaseException], app_env: Path
 ) -> None:
@@ -403,6 +527,75 @@ def test_join_all_waits_for_threads_started_while_waiting(app_env: Path) -> None
     # 更硬的一条：join_all 返回的那一刻，新起的线程必须已经落地（而不是「返回时还在跑」）。
     assert second_finished.is_set(), "join_all 返回时新起的线程还没有落地"
     assert joined == [[]], f"join_all 说还有没落地的线程：{joined}"
+
+
+def test_registration_and_start_have_no_gap(app_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """「登记」与「开跑」之间没有缝：锁还握着的时候，drain 说不出「都落地了」。
+
+    `background.start` 在锁里 start，而这个顺序是有语义的：`Thread.start()` 返回时线程
+    已经活着（`is_alive()` 为真），因此 drain 一旦拿到锁，看到的就是一个可 join 的对象。
+    把 `start()` 挪到锁外（或者干脆先开跑再登记），中间就多出一段窗口：登记表里有它、
+    `is_alive()` 还是假——而 `live()` 正是按 `is_alive()` 过滤的，于是 drain 会在那段
+    窗口里读到空集、宣布「都落地了」，那个线程随后才开跑，换库恰好与它并发。
+
+    这里把 `Thread.start()` 卡住，把那段窗口撑到可观测：`start()` 没返回之前，drain 必须
+    **拿不到**等待集（给出结论这件事本身要等锁），放行之后等待集里必须正好是那个线程，
+    而不是「登记了但还没开跑」被过滤成空集。
+    """
+
+    real_start = threading.Thread.start
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    body_entered = threading.Event()
+    release_body = threading.Event()
+
+    def delayed_start(thread: threading.Thread) -> None:
+        # 只卡这一条线程：别的线程（包括见证者自己起的）照常起。
+        if thread.name != "afr-test-gap":
+            return real_start(thread)
+        start_entered.set()
+        assert release_start.wait(timeout=GATE_TIMEOUT_SECONDS), "卡住的 Thread.start 没被放行"
+        return real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", delayed_start)
+
+    def body() -> None:
+        # 进到线程体里之后占住不放：等待集里那个名字在整个观察窗口内都活着。
+        body_entered.set()
+        release_body.wait(timeout=GATE_TIMEOUT_SECONDS)
+
+    def start_it() -> None:
+        background.start("afr-test-gap", body)
+
+    observed: list[list[str]] = []
+    probe_done = threading.Event()
+
+    def probe() -> None:
+        # 这就是 drain 读等待集的方式：一次 names()（拿不到锁就会被挡在门外）。
+        observed.append(background.names())
+        probe_done.set()
+
+    starter = threading.Thread(target=start_it, name="test-starter", daemon=True)
+    prober = threading.Thread(target=probe, name="test-prober", daemon=True)
+    starter.start()
+    try:
+        assert start_entered.wait(timeout=GATE_TIMEOUT_SECONDS), "没有走到 Thread.start()"
+        prober.start()
+        assert not probe_done.wait(timeout=STILL_BLOCKED_WINDOW_SECONDS), (
+            "Thread.start() 还没返回，drain 就已经给出了等待集：「登记」与「开跑」之间有缝，"
+            "这一段里还没开跑的线程会被漏掉"
+        )
+
+        release_start.set()
+        assert probe_done.wait(timeout=GATE_TIMEOUT_SECONDS), "放行之后 drain 仍然拿不到等待集"
+        assert observed == [["afr-test-gap"]], (
+            f"start 返回之后等待集里必须正好是那个线程，实际={observed}（空集=缝还在）"
+        )
+        assert body_entered.wait(timeout=GATE_TIMEOUT_SECONDS), "线程没有真的开跑"
+    finally:
+        release_start.set()
+        release_body.set()
+        background.join_all(timeout=GATE_TIMEOUT_SECONDS)
 
 
 def test_seeded_client_teardown_waits_for_the_seed_thread(

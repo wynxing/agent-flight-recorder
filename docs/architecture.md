@@ -257,17 +257,44 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 
 **已知未纳入等待集的后台工作**（如实登记，别让「没人看见」当成「没有」）：
 
-| 路径 | 等待集 | 诊断网 | 原因 |
-| --- | --- | --- | --- |
-| SDK 上报线程（`afr-flush-*`） | 不在 | **看得见**（名字是 `afr-*`） | 它是 SDK 自己的生命周期，由 `Recorder.close()` 排空；服务端测试用的播种录制器是 `flush_interval=0`，不起该线程 |
-| SSE 事件流（`_event_stream`） | 不在 | **看不见** | 它跑在 Starlette/AnyIO 的线程池里，线程名是 `AnyIO worker thread` / `asyncio-portal-*`（实测：**任何**一次 TestClient 请求都会造出这些名字，所以放宽匹配只会把诊断淹没在框架线程里），名字不归我们管。它只读库；`pytest` 里也没有 SSE 用例（只有控制台在用它） |
-| `test_suites.py` 的 `_ImmediateThreads` | 不在（drain 时会重新包裹一次） | 看不见（默认线程名） | 测试自己换上的执行器、自己等它跑完 |
-| `test_suites.py` 的 stall worker | **在**（`afr-test-suites-stall-worker`） | 看得见 | 它会写库（`run_case_blocking`），所以走 `background.start` 登记，而不是只靠测试自己那次 join 自保 |
-| `integrations/pi`（Node 运行器） | 不适用 | 不适用 | 独立进程/事件循环，与 Python 侧的 engine 切换无关 |
+| 路径 | 等待集 | 诊断网 | 守护状态 | 原因 |
+| --- | --- | --- | --- | --- |
+| SDK 上报线程（`afr-flush-*`） | 不在 | **看得见**（名字是 `afr-*`） | 例外（有意不纳入） | 它是 SDK 自己的生命周期，由 `Recorder.close()` 排空；服务端测试用的播种录制器是 `flush_interval=0`，不起该线程 |
+| SSE 事件流（`_event_stream`） | 不在 | **看不见** | 例外（有意不纳入） | 它跑在 Starlette/AnyIO 的线程池里，线程名是 `AnyIO worker thread` / `asyncio-portal-*`（实测：**任何**一次 TestClient 请求都会造出这些名字，所以放宽匹配只会把诊断淹没在框架线程里），名字不归我们管。它只读库；`pytest` 里也没有 SSE 用例（只有控制台在用它） |
+| `test_suites.py` 的 `_ImmediateThreads` | 不在（drain 之后的提交会重新包裹） | 看不见（默认线程名） | 例外（有意不纳入），范围边界见下 | 测试自己换上的执行器、自己等它跑完 |
+| `test_suites.py` 的 stall worker | **在**（`afr-test-suites-stall-worker`） | 看得见 | 由 `test_suites.py::test_condition_reached_the_latest_run_but_not_a_new_unlabelled_one` 断言它在登记表里（改回裸线程必红） | 它会写库（`run_case_blocking`），所以走 `background.start` 登记，而不是只靠测试自己那次 join 自保 |
+| `integrations/pi`（Node 运行器） | 不适用 | 不适用 | 不适用 | 独立进程/事件循环，与 Python 侧的 engine 切换无关 |
+
+**范围边界**（不是缺口，但不写下来就会被读成「全覆盖」）：池那一半是靠包裹 `submit` 得来的，
+因此在 `install()` 之前就已经提交出去、还在飞的任务看不见——`ThreadPoolExecutor` 不暴露在飞
+任务的句柄，「先包裹、再提交」是这条路的纪律。当前仓库里唯一的换执行器用例
+（`test_suites.py` 的 `_ImmediateThreads`）自己在测试里等批次落地；要换执行器的测试请照办：
+**换完先让一次 drain（`wait_idle()` / `assert_idle()`）把它认下来，再提交。**
 
 一条纪律：**加了新的后台路径，就同时把它登记进等待集**；确实登记不了（第三方线程）的，写进
 上面这张表并写清「诊断网认不认得出它」，别让它隐身。诊断网只认 `afr-` 前缀（`conftest.py`
 的 `stray_threads()`），因此**自己起的线程要按 `afr-<用途>` 命名**——名字是它唯一的可见性。
+
+### 这条线上的每一处语义，谁在守
+
+守护集中在 `server/tests/test_background_drain.py`，全部是**确定性反证**：把实现改回旧行为
+（或删掉那句收紧），对应测试立刻变红——不是「连跑多次没复现」。每一轮的实际变异命令、输出与
+还原都留在那一轮的 PR 里，这里只登记「哪条语义、由谁守」：
+
+| 等待集上的语义 | 守护（删掉它必红的测试） |
+| --- | --- |
+| 应用起的线程登记在册、可被 join | `test_seed_thread_is_in_the_waiting_set`、`test_drain_waits_for_the_seed_thread` |
+| 换库点的拆除必须等它，而不是直接换库 | `test_seeded_client_teardown_waits_for_the_seed_thread` |
+| 用例池 / 套件池 / **回放池**都进命名计数 | `test_a_case_pool_task_is_in_the_waiting_set`、`test_a_suite_pool_task_is_in_the_waiting_set`、`test_a_replay_pool_task_is_in_the_waiting_set` |
+| drain 开始前重新认一次当前执行器 | `test_a_mid_test_executor_swap_is_tracked_by_the_drain` |
+| 等不到就**判失败**（不是留一条警告） | `test_an_unlanded_task_fails_the_swap` |
+| 等待期间新起的线程也不能漏 | `test_join_all_waits_for_threads_started_while_waiting` |
+| 「登记」与「开跑」之间没有缝（锁内 start） | `test_registration_and_start_have_no_gap` |
+| 失败可诊断：报任务名与当时的库名，而不是一个计数 | `test_leftover_work_is_reported_by_name_and_database` |
+| 产品行为不变：播种仍然异步、不阻塞服务可用、关掉就不起线程 | `test_seed_thread_is_in_the_waiting_set`、`test_seeding_off_creates_no_seed_thread` |
+
+**本线已知缺口清单：空。** 上面每一条语义都能指出一个会真变红的守护；剩下的不是缺口，而是
+上表登记的两个「有意不纳入」例外与一条**范围边界**（都在上面写明了）。
 
 ---
 
