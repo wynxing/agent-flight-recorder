@@ -545,6 +545,121 @@ def test_a_batch_that_never_hits_its_cap_is_an_ordinary_batch(
 # ------------------------------------------------------------------ 请求校验
 
 
+def test_the_batch_ledger_lands_before_the_last_cell_becomes_terminal(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """整批的账必须在「最后一个格子变成终态」之前落库，否则控制台会读到过期数字。
+
+    批次的可观察状态由格子的状态推导：最后一格一落终态，批次就算「已结束」。如果这时账
+    还停在上一格那一刻，用户会读到一个「已结束、但不是整批用量」的记账——写这条能力时
+    抓到的正是这个竞态（顺序反了就复现）。因此这里钉的是顺序不变量本身，而不是靠轮询去撞
+    那个很窄的窗口：轮询会变成一个时快时慢、说不清红绿的测试。
+
+    记录的是两条真实调用：整批的发布（_publish_suite_budget）与格子的终态落库
+    （_finish_item）。变红的方式是确定的：把发布挪到终态之后，最后一条 publish 就会排在
+    最后一条终态之后。
+    """
+
+    rows = _create_cases(client, make_run, count=2)
+    _install_spending_runner(monkeypatch, per_cell=2)
+    timeline: list[tuple[str, Any]] = []
+
+    real_finish = suites._finish_item
+    real_publish = suites._publish_suite_budget
+    real_not_started = suites._mark_not_started
+
+    def finish(item_id: str, verdict: str, results: Any, cause: Any) -> None:
+        real_finish(item_id, verdict, results, cause)
+        timeline.append(("cell_terminal", item_id))
+
+    def not_started(item_id: str) -> None:
+        real_not_started(item_id)
+        timeline.append(("cell_terminal", item_id))
+
+    def publish(suite_id: str, ledger: Any) -> None:
+        real_publish(suite_id, ledger)
+        usage = ledger.usage()
+        timeline.append(("batch_published", (usage.model_calls_used, usage.exceeded)))
+
+    monkeypatch.setattr(suites, "_finish_item", finish)
+    monkeypatch.setattr(suites, "_publish_suite_budget", publish)
+    monkeypatch.setattr(suites, "_mark_not_started", not_started)
+
+    suite_id = client.post(
+        "/v1/suites",
+        json={
+            "case_ids": [row["id"] for row in rows],
+            "conditions": [{"model": "m"}],
+            "budget": {"max_model_calls": 4},
+        },
+    ).json()["suite_id"]
+    body = _await_suite(client, suite_id)
+
+    terminal = [index for index, (kind, _) in enumerate(timeline) if kind == "cell_terminal"]
+    assert len(terminal) == 2, timeline
+    # 关键断言：最后一格变终态的那一刻，账里已经有整批的用量了。
+    # （之后再发布几次是幂等的，不算问题；有问题的是「终态可见、账还没到」。）
+    before_last_terminal = [
+        value
+        for index, (kind, value) in enumerate(timeline)
+        if kind == "batch_published" and index < terminal[-1]
+    ]
+    assert before_last_terminal, timeline
+    assert max(before_last_terminal) == (4, False)
+    assert body["budget"]["model_calls_used"] == 4
+
+
+def test_a_stopped_batch_publishes_the_stop_before_marking_cells_not_started(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一条不变量走「触顶」那条路：先记下整批已触顶，再让格子变成「未启动」。
+
+    反过来的话，用户会先看到一个「已结束、但没触顶、也没有格子没跑」的批次——那正是把
+    一次被预算拦下的批次说成正常跑完。顺序在这里是结论的一部分，不是实现细节。
+    """
+
+    rows = _create_cases(client, make_run, count=3)
+    _install_spending_runner(monkeypatch, per_cell=2)
+    timeline: list[tuple[str, Any]] = []
+
+    real_publish = suites._publish_suite_budget
+    real_not_started = suites._mark_not_started
+
+    def not_started(item_id: str) -> None:
+        real_not_started(item_id)
+        timeline.append(("cell_terminal", item_id))
+
+    def publish(suite_id: str, ledger: Any) -> None:
+        real_publish(suite_id, ledger)
+        usage = ledger.usage()
+        timeline.append(("batch_published", (usage.model_calls_used, usage.exceeded)))
+
+    monkeypatch.setattr(suites, "_publish_suite_budget", publish)
+    monkeypatch.setattr(suites, "_mark_not_started", not_started)
+
+    suite_id = client.post(
+        "/v1/suites",
+        json={
+            "case_ids": [row["id"] for row in rows],
+            "conditions": [{"model": "m"}],
+            "budget": {"max_model_calls": 2},
+        },
+    ).json()["suite_id"]
+    body = _await_suite(client, suite_id)
+
+    terminal = [index for index, (kind, _) in enumerate(timeline) if kind == "cell_terminal"]
+    assert len(terminal) == 2, timeline
+    # 第一个「未启动」格子出现之前，整批已经是「已触顶」的状态了。
+    before_first_terminal = [
+        value
+        for index, (kind, value) in enumerate(timeline)
+        if kind == "batch_published" and index < terminal[0]
+    ]
+    assert (2, True) in before_first_terminal, timeline
+    assert body["budget"]["exceeded"] is True
+    assert body["budget"]["not_started"] == 2
+
+
 def test_negative_batch_budget_is_rejected(client: Any, make_run: Any) -> None:
     """负数是没意义的上限：与单次回放一样当场 422，而不是跑出一个奇怪的批次。"""
 
@@ -772,7 +887,8 @@ def test_the_cell_accounting_and_the_batch_accounting_do_not_overwrite_each_othe
 def test_estimate_says_unknown_instead_of_summing_the_known_part(seeded_client: Any) -> None:
     """整批预估：一格给不出成本，整批就不报数字——不把已知的那些加起来冒充整批。"""
 
-    parent = _wait_for_parent_run(seeded_client)
+    # 只需要「播种完成、用例已就绪」这一个前提：预估本身不碰 Run。
+    _wait_for_parent_run(seeded_client)
     case = _wait_for_seeded_case(seeded_client)
 
     # 复现模式本来就不花模型钱：0 次调用、$0 是事实，不是猜测。
@@ -829,10 +945,100 @@ def test_estimate_says_unknown_instead_of_summing_the_known_part(seeded_client: 
     assert "上限" in capped["detail"]
 
 
+#: 预估里不许出现的措辞：它们把「这一维守住了」说成事实，而实际上是两件不同的事
+#: （成本未知时这一维根本不会触发；成本已知时已发出的那次调用仍会花钱）。
+_NO_GUARANTEE_WORDING = ("不会超过", "最多花", "最多跑这么多", "一定")
+
+
+def test_estimate_never_promises_a_cost_cap_it_cannot_enforce(seeded_client: Any) -> None:
+    """成本未知 + 声明成本上限：如实说「这一维无法判定」，不说「不会超过它」。
+
+    两件事让它没法兑现任何保证（见 docs/replay-semantics.md 10.3）：
+
+    * `BudgetLedger.exceeded_by` 在成本为 None 时**跳过成本判定**，因此这一维根本不会
+      触发停止；
+    * 即便触发，成本也允许比上限多出最后一次调用（不做预测性中断）。
+
+    这条同时补上了成本上限两个 note 分支的覆盖缺口：旧实现从这里输出一句「成本上限声明为
+    $X + 不会超」的保证（本文件禁用的那类措辞），而它直通控制台的「先预估整批」那一行。
+    """
+
+    _wait_for_parent_run(seeded_client)
+    case = _wait_for_seeded_case(seeded_client)
+
+    def estimate(budget: dict[str, Any]) -> dict[str, Any]:
+        response = seeded_client.post(
+            "/v1/suites/estimate",
+            json={
+                "case_ids": [case["id"]],
+                "conditions": [{"model": UNPRICED_MODEL}],
+                "budget": budget,
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    # 剧本模型不在价格表内：成本无法预估。
+    only_cost_cap = estimate({"max_cost_usd": 0.000001})
+    assert only_cost_cap["cost_usd"] is None
+    for banned in _NO_GUARANTEE_WORDING:
+        assert banned not in only_cost_cap["detail"], only_cost_cap["detail"]
+    # 同时必须说清真实的约束是什么：只有成本上限 + 成本未知 = 这一批没有任何约束。
+    assert "无法判定" in only_cost_cap["detail"]
+    assert "没有产生实际约束" in only_cost_cap["detail"]
+
+    # 同时声明调用次数上限时，老实说约束落在次数上（成本这一维不参与判定）。
+    both = estimate({"max_cost_usd": 0.000001, "max_model_calls": 100})
+    for banned in _NO_GUARANTEE_WORDING:
+        assert banned not in both["detail"], both["detail"]
+    assert "无法判定" in both["detail"]
+    assert "调用次数上限" in both["detail"]
+
+
+def test_estimate_does_not_dress_a_cost_cap_up_as_an_estimate(seeded_client: Any) -> None:
+    """成本已知且超过上限时：不把预估改写成上限值，并说清可能多出最后一次调用。
+
+    旧实现会把 `cost_usd` 静默裁成上限，然后写「因此预计最多花这么多」——那等于把
+    「到点后不再发起新调用」说成「总花费不超过上限」，而已经发出的那次调用照样要花钱。
+    调用次数那一维可以裁（次数在发出之前就知道，是硬上限），成本这一维不行。
+    """
+
+    _wait_for_parent_run(seeded_client)
+    case = _wait_for_seeded_case(seeded_client)
+
+    priced = seeded_client.post(
+        "/v1/suites/estimate",
+        json={"case_ids": [case["id"]], "conditions": [{"model": PRICED_MODEL}]},
+    ).json()
+    assert priced["cost_usd"] is not None and priced["cost_usd"] > 0
+
+    cap = round(priced["cost_usd"] / 4, 6)
+    capped = seeded_client.post(
+        "/v1/suites/estimate",
+        json={
+            "case_ids": [case["id"]],
+            "conditions": [{"model": PRICED_MODEL}],
+            "budget": {"max_cost_usd": cap},
+        },
+    ).json()
+
+    # 数字没有被静默改写：它仍然是整批的估算，而不是上限值。
+    assert capped["cost_usd"] == priced["cost_usd"]
+    assert capped["cost_usd"] != cap
+    # 上限值本身要在说明里出现（渲染方式与实现同一套插值，不另立一份格式）。
+    assert f"整批成本上限是 ${cap}，" in capped["detail"]
+    for banned in _NO_GUARANTEE_WORDING:
+        assert banned not in capped["detail"], capped["detail"]
+    # 如实说明这一维到底会怎样：到点停、已发出的跑完、可能多出最后一次调用。
+    assert "步边界" in capped["detail"]
+    assert "允许完成" in capped["detail"]
+    assert "多出最后一次调用" in capped["detail"]
+
+
 def test_estimate_is_read_only(seeded_client: Any) -> None:
     """预估不创建批次、也不产生 Run：它只是读录制算一遍。"""
 
-    parent = _wait_for_parent_run(seeded_client)
+    _wait_for_parent_run(seeded_client)
     _wait_for_seeded_case(seeded_client)
     runs_before = seeded_client.get("/v1/runs").json()["total"]
     suites_before = len(seeded_client.get("/v1/suites").json()["suites"])
@@ -907,7 +1113,8 @@ def _run_console_module() -> str:
         pytest.skip("install node to run the console wording contract")
 
     script = (
-        "import { notStartedLabel, conditionVerdict, unfinishedBreakdown } from './web/src/utils/suite.ts';"
+        "import { notStartedLabel, conditionVerdict, unfinishedBreakdown, batchLifecycleLabel } "
+        "from './web/src/utils/suite.ts';"
         "let raw = '';"
         "process.stdin.setEncoding('utf8');"
         "process.stdin.on('data', (chunk) => { raw += chunk; });"
@@ -918,6 +1125,7 @@ def _run_console_module() -> str:
         "    stopped: conditionVerdict(payload.stopped),"
         "    finished: conditionVerdict(payload.finished),"
         "    breakdown: unfinishedBreakdown(payload.stopped),"
+        "    lifecycle: payload.batches.map((b) => batchLifecycleLabel(b)),"
         "  }));"
         "});"
     )
@@ -944,6 +1152,14 @@ def _run_console_module() -> str:
                     "not_started": 0,
                     "determinable_rate": 0.75,
                 },
+                "batches": [
+                    {"status": "running", "exceeded": False, "not_started": 0},
+                    {"status": "finished", "exceeded": False, "not_started": 0},
+                    # 触顶而停止：还有格子没跑，「已完成」是在把没跑完说成跑完了。
+                    {"status": "finished", "exceeded": True, "not_started": 3},
+                    # 未启动格子存在（但记账缺失时）也要按「已停止」说。
+                    {"status": "finished", "exceeded": False, "not_started": 1},
+                ],
             }
         ),
         capture_output=True,
@@ -970,6 +1186,24 @@ def test_the_console_and_the_server_say_the_same_thing_about_unstarted_cells() -
     assert rendered["finished"] == "4 条中 1 条拿不到结论"
     # 分组的构成说明与服务端 detail 用的是同一个短语。
     assert rendered["breakdown"] == f"，其中 3 条{NOT_STARTED_LABEL}"
+
+
+def test_a_stopped_batch_is_never_labelled_as_finished_in_the_console() -> None:
+    """触顶而停止的批次角标不许写「已完成」：那是本 PR 新造出的「结束但没跑完」路径。
+
+    「finished」只是生命周期值，它不再等于「所有格子都有结论」。角标若照旧显示「已完成」，
+    既紧邻着「已完成 X / Y」的计数（同词两义，违反 utils/suite.ts 自己声明的规则），
+    也等于把没跑完说成跑完了——验收 4 明确禁止。这条跑的是控制台的真实模块，因此把
+    `batchLifecycleLabel` 改回「finished ⇒ 已完成」会让它变红。
+    """
+
+    rendered = _run_console_module()
+    assert rendered["lifecycle"] == ["进行中", "已完成", "已停止", "已停止"]
+    # 角标那句话里不许出现「已完成」之外的结论性措辞。
+    for label in rendered["lifecycle"]:
+        assert label in {"进行中", "已完成", "已停止"}
+    for banned in BANNED_WORDING:
+        assert banned not in rendered["lifecycle"][2]
 
 
 def test_the_batch_detail_never_claims_a_finished_or_passed_batch() -> None:

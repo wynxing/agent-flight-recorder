@@ -93,6 +93,30 @@ export function determinableRateText(group: ConditionProgress): string {
 export function causeDrillLabel(count: number): string {
   return '展开 ' + count + ' 条拿不到结论的成因'
 }
+
+/** 批次的生命周期，用于标题行的角标。 */
+export interface BatchLifecycle {
+  status: string
+  /** 整批是否因预算触顶而停止。 */
+  exceeded?: boolean | null
+  /** 因整批预算用尽而没跑的格子数。 */
+  not_started?: number | null
+}
+
+/**
+ * 批次角标的一句话。「已完成」只能指向一个数（completed），因此**触顶而停止的批次不许
+ * 显示它**：那种批次里还有格子从未跑过，「已完成」与紧邻的「已完成 X / Y」会变成同词两义，
+ * 也等于把「没跑完」说成「跑完了」——那正是这一轮反复强调不许出现的措辞。
+ *
+ * 触顶（或有格子未启动）时说的是「已停止」：它陈述的是一个事实（不会再有格子启动了），
+ * 既没声称跑完，也没声称通过。
+ */
+export function batchLifecycleLabel(batch: BatchLifecycle): string {
+  if (batch.status === 'running') return '进行中'
+  if (batch.exceeded || (batch.not_started ?? 0) > 0) return '已停止'
+  return '已完成'
+}
+
 /**
  * 条件的可读标签：只写这个条件**实际覆盖了**什么。
  *

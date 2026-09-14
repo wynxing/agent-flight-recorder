@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -333,13 +334,31 @@ def estimate_suite(
             )
         if declared.max_cost_usd is not None:
             if cost is None:
+                # 成本未知时这一维**根本不会触发**（BudgetLedger.exceeded_by 在 cost 为
+                # None 时跳过成本判定），因此这里不能写成「不会超过它」：那不是「守住了
+                # 上限」，而是「这一维没有生效」。缺数据就让缺数据自己说话，并说清这一次
+                # 声明的实际约束落在哪一维（没有调用次数上限时就是没有约束）。
+                if declared.max_model_calls is not None:
+                    bound = (
+                        f"这一次的实际约束落在调用次数上限上（{declared.max_model_calls} 次），"
+                        "成本这一维不参与判定。"
+                    )
+                else:
+                    bound = "这一次声明没有产生实际约束。"
                 notes.append(
-                    f"整批成本上限声明为 ${declared.max_cost_usd}，实际不会超过它；缺数据的那部分无法预估。"
+                    f"整批成本上限声明为 ${declared.max_cost_usd}，但这一维无法判定："
+                    "有格子的成本按本地价格表算不出来，未知不会被当成 0，因此它不会在成本到点时停下；"
+                    f"{bound}"
                 )
             elif cost > declared.max_cost_usd:
-                cost = round(declared.max_cost_usd, 6)
+                # 不把预估数字改写成上限值：那会读成「预计就花这么多」。实际语义是
+                # 「到点后不再发起新调用，已经发出的那次允许跑完」——成本可能比上限多出
+                # 最后一次调用（见 docs/replay-semantics.md 10.3）。调用次数那一维可以裁，
+                # 因为次数在发出之前就知道；成本这一维不行。
                 notes.append(
-                    f"声明的整批成本上限是 ${declared.max_cost_usd}，因此预计最多花这么多。"
+                    f"整批成本上限是 ${declared.max_cost_usd}，低于上面的估算："
+                    "达到上限后会在步边界停止、不再发起新的调用；已经发出的那次调用允许完成并如实记账，"
+                    "因此实际成本可能比上限多出最后一次调用，后面的格子不会启动。"
                 )
 
     if calls == 0 and not unknown:

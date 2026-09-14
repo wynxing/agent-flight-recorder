@@ -29,6 +29,7 @@ import StatePanel from '@/components/StatePanel.vue'
 import { useSessionStore } from '@/stores/session'
 import { ASSERTION_LABELS, causeInfo, causeOf, relativeTime, shortId, truncate } from '@/utils/format'
 import {
+  batchLifecycleLabel,
   causeDrillLabel,
   conditionLabel,
   conditionVerdict,
@@ -434,6 +435,25 @@ function rateText(group: SuiteConditionGroup) {
   return determinableRateText(group)
 }
 
+// 批次角标的措辞只有一套规则（utils/suite.ts），由跨语言契约测试钉住：
+// 触顶/有未启动格子的批次不许显示「已完成」——那是把「没跑完」说成「跑完了」。
+const suiteStopped = computed(
+  () =>
+    !!suite.value &&
+    suite.value.status !== 'running' &&
+    ((suite.value.budget?.exceeded ?? false) || (suite.value.budget?.not_started ?? 0) > 0),
+)
+
+const suiteLifecycleText = computed(() =>
+  suite.value
+    ? batchLifecycleLabel({
+        status: suite.value.status,
+        exceeded: suite.value.budget?.exceeded ?? false,
+        not_started: suite.value.budget?.not_started ?? 0,
+      })
+    : '进行中',
+)
+
 // 每一条的诊断信息：有成因就给成因，否则给第一条没过的断言。
 // 无论哪一类，都不会把「拿不到结论」写成一个「未通过」。
 function diagnosis(item: SuiteItem) {
@@ -584,9 +604,17 @@ onUnmounted(() => {
       <header>
         <h2>
           批次 {{ shortId(suite.id) }}
-          <span class="status" :class="suite.status === 'running' ? 'running' : 'passed'">
-            <component :is="statusIcon(suite.status === 'running' ? 'running' : 'passed')" :size="13" weight="bold" />
-            {{ suite.status === 'running' ? '进行中' : '已完成' }}
+          <!--
+            触顶而停止的批次不显示「已完成」：那个词在本页与「已完成 X / Y」的计数同形，
+            而同词两义正是 utils/suite.ts 明令禁止的；它还会把「没跑完」说成「跑完了」。
+          -->
+          <span class="status" :class="suiteStopped ? 'stopped' : suite.status === 'running' ? 'running' : 'passed'">
+            <component
+              :is="suiteStopped ? PhProhibit : suite.status === 'running' ? PhPlay : PhCheckCircle"
+              :size="13"
+              weight="bold"
+            />
+            {{ suiteLifecycleText }}
           </span>
         </h2>
         <p class="meta">
@@ -910,6 +938,10 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+/* 触顶而停止的批次：既不是进行中，也不是「跑完了」，因此用中性强调色。 */
+.suite .status.stopped {
+  color: var(--warning);
 }
 .suite .meta {
   margin-top: 5px;
