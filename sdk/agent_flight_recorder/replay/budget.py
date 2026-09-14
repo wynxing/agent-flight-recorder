@@ -128,6 +128,25 @@ class BudgetLedger:
         usage.detail = usage_detail(usage)
         return usage
 
+    def remaining(self) -> ReplayBudget:
+        """这份账本还剩下多少额度（两个维度各自独立）。
+
+        给「把整批剩下的额度分给下一个格子」用：批量套件在启动每一格之前调用它，
+        因此格子最多只可能花掉真正剩下的那部分。未声明的维度仍然是 None（不参与判定）。
+
+        成本未知时**不设成本额度**，而不是把未知当成 0：未知不是「已经花光了」，
+        给下一个格子一个凭空的 0 上限既是编造，也会把本该继续跑的格子误伤掉。
+        调用次数这一维不受成本未知的影响，照常按计数算剩余。
+        """
+
+        calls = None
+        if self.budget.max_model_calls is not None:
+            calls = max(0, self.budget.max_model_calls - self.model_calls_used)
+        cost = None
+        if self.budget.max_cost_usd is not None and self.cost_used_usd is not None:
+            cost = max(0.0, round(self.budget.max_cost_usd - self.cost_used_usd, 6))
+        return ReplayBudget(max_cost_usd=cost, max_model_calls=calls)
+
 
 def usage_detail(usage: BudgetUsage) -> str:
     """把记账翻成一句人话。未知就说未知，不说 0。"""

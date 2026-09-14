@@ -14,6 +14,7 @@ import type {
   RunListResponse,
   SuiteCondition,
   SuiteDetail,
+  SuiteEstimateResponse,
   SuiteListResponse,
   SuiteSubmitResponse,
   TimelineResponse,
@@ -142,9 +143,28 @@ export const api = {
   /**
    * 发起一次批量运行：一组用例 × 一组条件。
    * 立刻返回批次标识，执行在后台；进度来自对批次查询的轮询。
+   *
+   * budget 是**整批**的硬上限；不传就是「不设上限」，此时套件行为与没有这套能力时一致。
    */
-  runSuite: (payload: { case_ids?: string[]; all_cases?: boolean; conditions?: SuiteCondition[] }) =>
+  runSuite: (payload: {
+    case_ids?: string[]
+    all_cases?: boolean
+    conditions?: SuiteCondition[]
+    budget?: ReplayBudget | null
+  }) =>
     request<SuiteSubmitResponse>('/v1/suites', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 预估整批要花多少：不调用模型，也不创建批次。成本给不出来时是 null，不是 0。 */
+  estimateSuite: (payload: {
+    case_ids?: string[]
+    all_cases?: boolean
+    conditions?: SuiteCondition[]
+    budget?: ReplayBudget | null
+  }) =>
+    request<SuiteEstimateResponse>('/v1/suites/estimate', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

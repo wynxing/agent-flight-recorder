@@ -223,7 +223,7 @@ pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器
 ## 7. 批量套件
 
 批量运行（一次跑一批用例 × 一组条件）不改变上面的上报协议，它的契约只在服务端与控制台之间。
-三条约定是硬约束，不是实现细节：
+五条约定是硬约束，不是实现细节：
 
 1. **条件随结果记录。** 每个格子都带 `condition = {prompt, model, system_prompt, preset}`，
    `prompt` / `model` 由请求给出，`system_prompt` 是执行当时解析出来的 Prompt 正文，
@@ -236,32 +236,49 @@ pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器
 3. **「还没跑」不等于「拿不到结论」。** 每个条件有三个互斥且穷尽的桶：
    `total = determinable + undecided + unfinished`。
    `undecided` 只包括**跑过了、但没有可信结论**的格子（`inconclusive + error`）；
-   `unfinished` 是**还没跑完**的格子（`pending + running`）。
+   `unfinished` 是**还没跑完**的格子（`pending + running + not_started`）。
    未完成的格子从未执行过、因此没有任何结论，把它算进 `undecided` 等于对一个从未运行过的
    格子下「跑过了、但拿不到」这个断言。控制台据此分两个时刻说话：还有格子未完成时只陈述
    「已完成 / 未完成」，整批完成后才说「N 条中 M 条拿不到结论」（M 即 `undecided`）。
    同一张卡片上每个短语只对应一个数：已完成 = `completed`、未完成 = `unfinished`、
    拿不到结论 = `undecided`，通过 / 未通过 / 无法判断 / 执行出错 分别等于同名的计数。
+   `unfinished` 里的 `not_started` 单独再给一个数：它说的是「不会再轮到」，
+   与「还没轮到」不是一回事（见第 5 条与 [回放语义](replay-semantics.md) 第 10 节）。
 4. **inconclusive 不等于 failed。** 聚合沿用 `code` + `detail` 的成因分类：
    `inconclusive`、`error`、`failed` 三态分列，每个格子的成因逐条可见。
    成因只属于已经跑完的两类：`inconclusive` 与 `error` 的格子必定带成因，
    未完成的格子必定没有成因。
+5. **整批可以声明上限，没跑成的格子如实标注。** 提交时可以声明这一批最多花多少
+   （`budget`，与单次回放同一套 `ReplayBudget` 语义）；不声明 = 与没有这套能力时
+   逐字一致。到点之后**不再启动新格子**，已启动的格子跑完并如实记账，没轮到的格子状态是
+   `not_started`（呈现为「未启动（因批次预算用尽）」），它没有结论、没有成因，
+   因此不计入 `failed`、也不计入 `undecided`，而是归在 `unfinished` 一侧。
 
 ```
-POST /v1/suites            {case_ids: [..] | all_cases: true, conditions: [{prompt, model}]}
+POST /v1/suites            {case_ids: [..] | all_cases: true, conditions: [{prompt, model}],
+                            budget?: {max_cost_usd?, max_model_calls?}}
                            -> {suite_id, status, total, conditions}     # 立即返回，执行在后台
+POST /v1/suites/estimate   {case_ids [..] | all_cases: true, conditions, budget?}
+                           -> {cells, model_calls, cost_usd, cost_is_estimate, detail}
+                              # 只读：不调用模型、不创建批次；成本给不出来时是 null + 原因
 GET  /v1/suites            -> {suites: [{id, status, total, completed, counts, errors, ...}]}
 GET  /v1/suites/{id}       -> {id, status, total, completed, counts, errors,
+                               budget: {max_cost_usd, max_model_calls, model_calls_used,
+                                        cost_used_usd, cost_is_estimate, exceeded, stopped_by,
+                                        cost_unknown, not_started, detail} | null,
                                groups: [{condition, label, total, completed, counts,
-                                         determinable, undecided, unfinished, determinable_rate, errors,
+                                         determinable, undecided, unfinished, not_started,
+                                         determinable_rate, errors,
                                          items: [{case_id, condition, status, run_id, results, cause}]}]}
 ```
 
 `label` 只描述这个条件**实际覆盖了**什么：没写模型就写「沿用用例自身模型」，不替它起一个
 「默认模型」之类的名字——服务端担保不了那个默认值。
 
-格子的状态取值是 `pending / running / passed / failed / inconclusive / error`；前两者是未完成态，
-不是结论，因此永远不会被并进 `failed`。用例侧的 `last_condition` 记录「最近一次结论是在什么条件下
+格子的状态取值是 `pending / running / not_started / passed / failed / inconclusive / error`；
+前三个是未完成态，不是结论，因此永远不会被并进 `failed`（也不会被并进 `undecided`）。
+其中 `not_started` 是「未启动（因批次预算用尽）」：格子从未被执行过，既不是「没通过」，
+也不是「跑过了但拿不到结论」。用例侧的 `last_condition` 记录「最近一次结论是在什么条件下
 得出的」；单条运行不带条件时为 `null`（该入口允许直接传 Prompt 正文覆盖而不带版本名，
 凭空补一个条件名会把一次真实覆盖描述成「什么都没变」）。
 

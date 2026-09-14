@@ -14,6 +14,7 @@ from agent_flight_recorder.models import (
     RunSummary,
 )
 from agent_flight_recorder.replay.reasons import InconclusiveReason
+from agent_flight_recorder.replay.budget import BudgetUsage
 from pydantic import BaseModel, Field
 
 from .assertions import AssertionResult, AssertionSpec
@@ -153,6 +154,9 @@ class SuiteSubmitRequest(BaseModel):
     all_cases: bool = False
     #: 条件列表；不给就是「沿用用例自身条件」这一列。
     conditions: list[SuiteCondition] = Field(default_factory=lambda: [SuiteCondition()])
+    #: **整批**的硬上限（最大成本 / 最大模型调用次数），与单次回放同一套语义。
+    #: 两个维度都不给 = 不设上限：此时套件行为与没有这套能力时逐字一致。
+    budget: ReplayBudget | None = None
 
 
 class SuiteSubmitResponse(BaseModel):
@@ -178,6 +182,19 @@ class SuiteItem(BaseModel):
     ended_at: datetime | None = None
 
 
+class SuiteBudgetUsage(BudgetUsage):
+    """整批的预算记账：与单次回放共用同一份字段（同一个 BudgetUsage），只多一个计数。
+
+    整批的「已用」是这一批**所有格子真实发生的模型调用**合起来的数字，来源与单次回放
+    是同一个账本实现，不是事后再去数一遍事件——那种做法会长出第二套记账口径。
+
+    not_started 是「因批次预算用尽而没跑」的格子数。它们从未执行、没有任何结论，
+    因此既不计入 failed，也不计入 inconclusive / error，而是归在 unfinished 一侧。
+    """
+
+    not_started: int = 0
+
+
 class SuiteConditionGroup(BaseModel):
     """一个条件的汇总。
 
@@ -186,8 +203,10 @@ class SuiteConditionGroup(BaseModel):
 
     三个桶互斥且穷尽：total == determinable + undecided + unfinished。
     undecided 只包括**跑过了、但拿不到可信结论**的格子（inconclusive + error）；
-    unfinished 是**还没跑完**的格子（pending + running），它没有任何结论，因此不能
-    被算进 undecided——把「还没跑」写成「拿不到结论」是对从未执行过的格子下断言。
+    unfinished 是**还没跑完**的格子（pending + running + not_started），它没有任何结论，
+    因此不能被算进 undecided——把「还没跑」写成「拿不到结论」是对从未执行过的格子下断言。
+    not_started 是 unfinished 里的一个子集：格子从未被启动过（整批预算已用尽），
+    它与「还没轮到」（pending）是两回事，界面必须能看出哪些没跑、为什么没跑。
     """
 
     condition_key: str
@@ -199,6 +218,7 @@ class SuiteConditionGroup(BaseModel):
     determinable: int
     undecided: int
     unfinished: int = 0
+    not_started: int = 0
     determinable_rate: float | None = None
     errors: int
     items: list[SuiteItem] = Field(default_factory=list)
@@ -215,7 +235,24 @@ class SuiteDetailResponse(BaseModel):
     completed: int
     counts: dict[str, int] = Field(default_factory=dict)
     errors: int
+    #: 整批的预算记账。没声明过整批上限时是 None：不设上限不等于「上限为 0」，
+    #: 也不该凭空多出一个「上限：无」的账目。
+    budget: SuiteBudgetUsage | None = None
     groups: list[SuiteConditionGroup] = Field(default_factory=list)
+
+
+class SuiteEstimateResponse(BaseModel):
+    """整批的预估：预计多少次真实模型调用、大概多少成本。
+
+    cost_usd 为 null 就是「无法预估」：只要有一格给不出成本，整批就不报数字，
+    也不会把已知的那些加起来冒充整批成本。
+    """
+
+    cells: int
+    model_calls: int = 0
+    cost_usd: float | None = None
+    cost_is_estimate: bool = True
+    detail: str = ""
 
 
 class SuiteSummary(BaseModel):
@@ -325,6 +362,8 @@ __all__ = [
     "SuiteCondition",
     "SuiteConditionGroup",
     "SuiteDetailResponse",
+    "SuiteBudgetUsage",
+    "SuiteEstimateResponse",
     "SuiteItem",
     "SuiteListResponse",
     "SuiteSubmitRequest",

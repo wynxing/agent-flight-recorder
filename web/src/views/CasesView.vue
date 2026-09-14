@@ -6,6 +6,7 @@ import {
   PhClock,
   PhPlay,
   PhPlus,
+  PhProhibit,
   PhQuestion,
   PhTrash,
   PhXCircle,
@@ -14,10 +15,12 @@ import { api } from '@/api/client'
 import type {
   CaseItem,
   ReplayBudget,
+  SuiteBudgetUsage,
   SuiteCondition,
   SuiteConditionGroup,
   SuiteConditionInfo,
   SuiteDetail,
+  SuiteEstimateResponse,
   SuiteItem,
   SuiteItemStatus,
 } from '@/api/types'
@@ -25,7 +28,13 @@ import CausePanel from '@/components/CausePanel.vue'
 import StatePanel from '@/components/StatePanel.vue'
 import { useSessionStore } from '@/stores/session'
 import { ASSERTION_LABELS, causeInfo, causeOf, relativeTime, shortId, truncate } from '@/utils/format'
-import { causeDrillLabel, conditionLabel, conditionVerdict, determinableRateText } from '@/utils/suite'
+import {
+  causeDrillLabel,
+  conditionLabel,
+  conditionVerdict,
+  determinableRateText,
+  notStartedLabel,
+} from '@/utils/suite'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -42,6 +51,10 @@ const conditions = ref<SuiteCondition[]>([{ prompt: '', model: '' }])
 const suite = ref<SuiteDetail | null>(null)
 const suiteError = ref('')
 const submitting = ref(false)
+// 整批的预算上限（留空 = 不设上限，不是「上限为 0」）与提交前的整批预估。
+const suiteBudget = ref({ cost: '', calls: '' })
+const estimating = ref(false)
+const estimate = ref<SuiteEstimateResponse | null>(null)
 
 let poller: number | null = null
 let suitePoller: number | null = null
@@ -215,18 +228,53 @@ async function startSuite() {
     suiteError.value = '先勾选要跑的用例，或点「全选」。'
     return
   }
+  const problem = suiteBudgetIssue()
+  if (problem) {
+    suiteError.value = problem
+    return
+  }
   submitting.value = true
   try {
+    const budget = parseBudget(suiteBudget.value)
     // 全选时走「全部用例」这条路，让服务端的这个入口也真的被用到。
     const response = allSelected.value
-      ? await api.runSuite({ all_cases: true, conditions: chosenConditions() })
-      : await api.runSuite({ case_ids: ids, conditions: chosenConditions() })
+      ? await api.runSuite({ all_cases: true, conditions: chosenConditions(), budget })
+      : await api.runSuite({ case_ids: ids, conditions: chosenConditions(), budget })
     await loadSuite(response.suite_id)
     startPolling()
   } catch (cause) {
     suiteError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
     submitting.value = false
+  }
+}
+
+/** 提交前先预估整批：不调用模型、也不创建批次。 */
+async function estimateBatch() {
+  suiteError.value = ''
+  estimate.value = null
+  const ids = selectedIds.value
+  if (!ids.length) {
+    suiteError.value = '先勾选要跑的用例，或点「全选」。'
+    return
+  }
+  const problem = suiteBudgetIssue()
+  if (problem) {
+    suiteError.value = problem
+    return
+  }
+  estimating.value = true
+  try {
+    const budget = parseBudget(suiteBudget.value)
+    estimate.value = await api.estimateSuite({
+      ...(allSelected.value ? { all_cases: true } : { case_ids: ids }),
+      conditions: chosenConditions(),
+      budget,
+    })
+  } catch (cause) {
+    suiteError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    estimating.value = false
   }
 }
 
@@ -255,6 +303,9 @@ function isHighlighted(caseId: string) {
 const STATUS_ICONS: Record<SuiteItemStatus, unknown> = {
   pending: PhClock,
   running: PhPlay,
+  // 「未启动」既不通过也不失败：它是一个从未发生过的格子，因此用一个「未开始」的记号，
+  // 而不是任何表示结论的图标。
+  not_started: PhProhibit,
   passed: PhCheckCircle,
   inconclusive: PhQuestion,
   failed: PhXCircle,
@@ -268,6 +319,8 @@ function statusIcon(status: string) {
 const STATUS_TEXTS: Record<SuiteItemStatus, string> = {
   pending: '排队中',
   running: '正在执行',
+  // 状态名只说「未启动」，原因由 notStartedLabel() 补齐（整批预算用尽）。
+  not_started: '未启动',
   passed: '通过',
   inconclusive: '无法判断',
   failed: '未通过',
@@ -279,10 +332,10 @@ function statusText(status?: string | null) {
   return STATUS_TEXTS[status as SuiteItemStatus] ?? status
 }
 
-// ------------------------------------------------------------------ 单次执行的预算上限
+// ------------------------------------------------------------------ 预算上限
 //
-// 与运行详情页同一套语义：留空 = 不设上限（不是「上限为 0」）；上限在 SDK 层生效，
-// 触顶时这一次执行停在步边界，结论是「无法判断」而不是「未通过」。
+// 单次执行与整批共用同一套语义（也与运行详情页一致）：留空 = 不设上限（不是「上限为 0」）；
+// 上限在 SDK 层生效，触顶时在步边界停下，已用 / 上限 / 是否触顶如实记账。
 const budgetFields = ref<Record<string, { cost: string; calls: string }>>({})
 
 function budgetInput(caseId: string) {
@@ -297,7 +350,11 @@ function setBudgetField(caseId: string, field: 'cost' | 'calls', value: string) 
 }
 
 function budgetForCase(caseId: string): ReplayBudget | null {
-  const input = budgetInput(caseId)
+  return parseBudget(budgetInput(caseId))
+}
+
+/** 把两个输入框读成一个上限对象；两个都空就是「不设上限」（null）。 */
+function parseBudget(input: { cost: string; calls: string }): ReplayBudget | null {
   const budget: ReplayBudget = {}
   if (input.cost.trim()) budget.max_cost_usd = Number(input.cost.trim())
   if (input.calls.trim()) budget.max_model_calls = Number(input.calls.trim())
@@ -305,7 +362,11 @@ function budgetForCase(caseId: string): ReplayBudget | null {
 }
 
 function budgetErrorFor(caseId: string): string {
-  const input = budgetInput(caseId)
+  return budgetIssue(budgetInput(caseId), '')
+}
+
+/** 上限填得不对就不提交：与其跑出一个没人能解释的花费，不如当场说清楚。 */
+function budgetIssue(input: { cost: string; calls: string }, scope: string): string {
   for (const [label, raw] of [
     ['最大成本', input.cost],
     ['最大模型调用次数', input.calls],
@@ -314,10 +375,39 @@ function budgetErrorFor(caseId: string): string {
     if (!text) continue
     const value = Number(text)
     if (!Number.isFinite(value) || value < 0) {
-      return `${label}必须是不小于 0 的数字；留空表示不设上限。`
+      return scope + label + '必须是不小于 0 的数字；留空表示不设上限。'
     }
   }
   return ''
+}
+
+function suiteBudgetIssue(): string {
+  return budgetIssue(suiteBudget.value, '整批')
+}
+
+/** 已用成本：null 是「未知」，不是 0（模型不在价格表内时这一维无法判定）。 */
+function costText(value?: number | null): string {
+  if (value === null || value === undefined) return '未知'
+  return '$' + value.toFixed(6)
+}
+
+/** 整批的上限写法；两个维度都可能各自没有声明。 */
+function batchLimitText(budget: SuiteBudgetUsage): string {
+  const parts: string[] = []
+  if (budget.max_model_calls !== null && budget.max_model_calls !== undefined) {
+    parts.push(budget.max_model_calls + ' 次真实模型调用')
+  }
+  if (budget.max_cost_usd !== null && budget.max_cost_usd !== undefined) {
+    parts.push(costText(budget.max_cost_usd) + ' 成本')
+  }
+  return parts.length ? parts.join(' · ') : '未设置'
+}
+
+/** 触顶的是哪一维：与运行详情页用同一套说法。 */
+function batchStopText(budget: SuiteBudgetUsage): string {
+  if (budget.stopped_by === 'model_calls') return '模型调用次数'
+  if (budget.stopped_by === 'cost') return '成本'
+  return '预算'
 }
 
 function causeOfCase(item: CaseItem) {
@@ -349,6 +439,8 @@ function rateText(group: SuiteConditionGroup) {
 function diagnosis(item: SuiteItem) {
   if (item.cause) return causeInfo(item.cause.code).label + '：' + item.cause.detail
   if (item.status === 'passed') return '断言全部通过'
+  // 未启动的格子没有成因（成因只属于跑过了的那两类），它的原因由状态本身说清。
+  if (item.status === 'not_started') return notStartedLabel()
   const failed = item.results.find((result) => !result.passed)
   if (failed) return failed.detail
   return item.status === 'pending' ? '等待执行' : '正在执行'
@@ -438,13 +530,54 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!--
+        整批的预算上限与单次执行是同一套语义：留空 = 不设上限（不是「上限为 0」）。
+        声明之后整批按顺序逐格执行——只有逐格，「整批不超过上限」才是可保证的结论。
+      -->
+      <div class="budget-field">
+        <span class="budget-label">整批预算上限（可选，留空表示不设上限）</span>
+        <div class="budget-inputs">
+          <label>
+            <span>整批最大成本（USD）</span>
+            <input
+              v-model="suiteBudget.cost"
+              type="text"
+              inputmode="decimal"
+              placeholder="不设上限"
+            />
+          </label>
+          <label>
+            <span>整批最大模型调用次数</span>
+            <input
+              v-model="suiteBudget.calls"
+              type="text"
+              inputmode="numeric"
+              placeholder="不设上限"
+            />
+          </label>
+        </div>
+        <span class="budget-hint">
+          到点后不再启动新格子；已启动的格子跑完并如实记账，没轮到的格子会被标成「未启动（因批次预算用尽）」。
+        </span>
+      </div>
+
       <p v-if="allSelected" class="hint">已全选，将按「全部用例」提交。</p>
       <p v-if="suiteError" class="suite-error">{{ suiteError }}</p>
 
-      <button class="primary" type="button" :disabled="submitting" @click="startSuite">
-        <PhPlay :size="13" weight="bold" />
-        {{ submitting ? '正在提交' : '发起批量运行' }}
-      </button>
+      <div class="submit-row">
+        <button class="primary" type="button" :disabled="submitting" @click="startSuite">
+          <PhPlay :size="13" weight="bold" />
+          {{ submitting ? '正在提交' : '发起批量运行' }}
+        </button>
+        <!-- 提交前先预估整批：不调用模型，也不创建批次；成本给不出来时如实说「无法预估」。 -->
+        <button class="ghost" type="button" :disabled="estimating" @click="estimateBatch">
+          {{ estimating ? '正在预估' : '先预估整批' }}
+        </button>
+      </div>
+      <p v-if="estimate" class="estimate">
+        预估：{{ estimate.cells }} 个格子 · 预计 {{ estimate.model_calls }} 次真实模型调用
+        <br />{{ estimate.detail }}
+      </p>
     </section>
 
     <section v-if="suite" class="suite">
@@ -465,6 +598,18 @@ onUnmounted(() => {
             <span class="sep">/</span>{{ relativeTime(suite.finished_at) }}结束
           </template>
         </p>
+        <!-- 整批的预算记账：已用 / 上限 / 是否触顶。没声明过整批上限时整块不出现。 -->
+        <p v-if="suite.budget" class="budget-line">
+          整批预算上限 {{ batchLimitText(suite.budget) }}
+          <span class="sep">/</span>已用 {{ suite.budget.model_calls_used }} 次真实模型调用
+          <span class="sep">/</span>已用成本 {{ costText(suite.budget.cost_used_usd) }}
+          <span class="sep">/</span>
+          <span v-if="suite.budget.exceeded" class="budget-hit">
+            已触顶（{{ batchStopText(suite.budget) }}）
+          </span>
+          <span v-else>未触顶</span>
+        </p>
+        <p v-if="suite.budget" class="budget-detail">{{ suite.budget.detail }}</p>
       </header>
 
       <ul class="groups">
@@ -491,6 +636,10 @@ onUnmounted(() => {
             <li class="error">执行出错 {{ countOf(group, 'error') }}</li>
             <!-- 未完成的格子单列一项，永远不并进「拿不到结论」：它没有结论，不是「拿不到」。 -->
             <li v-if="group.unfinished" class="pending">未完成 {{ group.unfinished }}</li>
+            <!-- 「未启动」是未完成里的一个子集：它不是「还没轮到」，而是整批预算已经用尽。 -->
+            <li v-if="group.not_started" class="not-started">
+              {{ notStartedLabel() }} {{ group.not_started }}
+            </li>
           </ul>
 
           <table class="items">
@@ -727,6 +876,24 @@ onUnmounted(() => {
   font-size: var(--step-1);
   color: var(--danger);
 }
+.submit-row {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.estimate {
+  font-size: var(--step-1);
+  color: var(--text-muted);
+  max-width: 90ch;
+}
+.budget-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.batch .budget-field {
+  width: min(100%, 480px);
+}
 
 /* ---------------------------------------------------------------- 批次汇总 */
 
@@ -748,6 +915,23 @@ onUnmounted(() => {
   margin-top: 5px;
   font-size: var(--step-1);
   color: var(--text-muted);
+}
+/* 整批的预算记账：与单次回放同一套字段，因此读法也一致。 */
+.budget-line {
+  margin-top: 5px;
+  font-size: var(--step-1);
+  color: var(--text-muted);
+}
+/* 触顶不是失败：用中性强调，不借失败色。 */
+.budget-hit {
+  color: var(--text);
+  font-weight: 600;
+}
+.budget-detail {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+  max-width: 90ch;
 }
 .has-errors {
   color: var(--danger);
@@ -815,6 +999,11 @@ onUnmounted(() => {
 }
 .counts .pending {
   color: var(--text-faint);
+}
+/* 「未启动」是未完成里的一类：它不是结论，因此不用任何结论色。 */
+.counts .not-started {
+  color: var(--text-muted);
+  border-style: dashed;
 }
 .items {
   width: 100%;

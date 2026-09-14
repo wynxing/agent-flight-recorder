@@ -111,6 +111,11 @@ class SuiteTable(SQLModel, table=True):
     status: str = Field(default="running", index=True)
     case_ids: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     conditions: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    #: 声明的**整批**上限（与单次回放同一套 ReplayBudget 语义）。None = 不设上限：
+    #: 不设上限的批次不该凭空多出一个「上限：无」的账目，调度与汇总也一个字段都不变。
+    budget: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
+    #: 整批的预算记账（已用 / 上限 / 是否触顶）。没声明上限时为 None。
+    budget_usage: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
     finished_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
 
