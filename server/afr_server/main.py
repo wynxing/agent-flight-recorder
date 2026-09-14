@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import background
 from .agents import describe_agents, load_agent_specs
 from .cases import create_case, snapshot_of, submit_case_run
 from .config import get_settings
@@ -94,8 +94,9 @@ async def lifespan(app: FastAPI):
     logger.info("AFR server ready on http://%s:%s (db=%s)", settings.host, settings.port, settings.db_path)
 
     if settings.seed_on_startup:
-        thread = threading.Thread(target=_seed_quietly, name="afr-seed", daemon=True)
-        thread.start()
+        # 播种必须走登记在册的入口：它仍然是启动后异步进行、仍然不阻塞服务可用，
+        # 但从此「还在播种」这件事能被等（见 background.py 与 issue #18）。
+        background.start("afr-seed", _seed_quietly)
     yield
 
 
