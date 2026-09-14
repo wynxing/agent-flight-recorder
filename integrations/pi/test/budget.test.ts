@@ -176,3 +176,42 @@ test('missing credentials stop before any real call, with the variable named', a
     await rm(root, {recursive: true, force: true});
   }
 });
+
+
+/**
+ * 这一条是第 8 轮构建会话真机上抓到的缺陷的反证：批量账本当时**没有把每一格的用量记回来**，
+ * 于是 declared 的 400 次上限一直是「已用 0」，额度永远不会缩小、也永远不会触顶——一个看起来
+ * 声明了上限、实际一次都没生效的账本。这里的调用顺序与 validate.ts 的批量循环一致。
+ */
+test('a batch ledger drains as cells finish, so the declared cap really binds', () => {
+  const ledger = new BudgetLedger({max_model_calls: 5, max_cost_usd: 1});
+  const seen: number[] = [];
+  let stopped = false;
+  for (let cell = 0; cell < 10; cell++) {
+    const budget = beginCell(ledger);
+    if (budget === null) { stopped = true; break; }
+    seen.push(budget.max_model_calls ?? -1);
+    // 每一格真的跑两次调用（成本可定价）。
+    ledger.mergeCell({model_calls_used: 2, cost_used_usd: 0.01});
+  }
+  assert.deepEqual(seen, [5, 3, 1]);
+  assert.equal(stopped, true);
+  assert.equal(ledger.stoppedBy, 'model_calls');
+  const usage = ledger.usage();
+  assert.equal(usage.model_calls_used, 6);
+  assert.equal(usage.exceeded, true);
+});
+
+test('booked-back usage keeps unknown cost unknown, never zero', () => {
+  const ledger = new BudgetLedger({max_cost_usd: 1});
+  ledger.mergeCell({model_calls_used: 2, cost_used_usd: 0.02});
+  ledger.mergeCell({model_calls_used: 1, cost_used_usd: null});
+  assert.equal(ledger.usage().model_calls_used, 3);
+  // 有一格算不出成本，整批的金额就是未知：未知不会被当成 0，成本这一维也就不再参与判定。
+  assert.equal(ledger.costUsedUsd, null);
+  assert.equal(ledger.exceededBy(), null);
+  assert.equal(ledger.usage().cost_unknown, true);
+  assert.deepEqual(ledger.remaining(), {max_cost_usd: null, max_model_calls: null});
+});
+
+

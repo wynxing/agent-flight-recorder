@@ -22,6 +22,7 @@ import { snapshot } from './workspace.ts';
 import { evaluate, type Assertion } from './cases.ts';
 import {
   BudgetLedger, batchUsageDetail, beginCell, budgetSpecFromOptions, estimateBatch,
+  notStartedReasonText,
   type BudgetSpec, type BudgetUsage, type RecordedCall,
 } from './budget.ts';
 
@@ -95,6 +96,7 @@ async function main() {
   const rows:any[]=[];
   const records=new Map<string,Bundle>();
   let negative:any;let stopReason:string|undefined;
+  let gate:any;
   const questions=new Map<string,string>();
   for(const task of tasks) questions.set(task.id,`${task.question}\n需要检查的文件：${task.files.join('、')}\n最终仅输出 JSON：{"claims":[{"id":"${task.id}","answer":布尔值或字符串,"evidence":[{"path":"相对文件路径","line":准确行号,"quote":"该行代码原文（可去除首尾空白）"}]}]}。不得引用文档代替实现。`);
   const assertionsFor=(task:any):Assertion[]=>[{type:'no_error'},{type:'json_claim',value:{id:task.id,answer:task.answer,evidence:task.evidence}}];
@@ -133,6 +135,7 @@ async function main() {
           const parent=fresh(questions.get(task.id)!,prompts.baseline,provider,model,suite.commit);
           await run({bundle:parent,root:checkout.root,authPath:values['auth-path'],modelsPath:values['models-path'],budget:cell??undefined});
           stored=await save(file,parent);
+          ledger.mergeCell(stored.budget);
           await upload(stored,endpoint);
           await writeFile(path.join(out,`${task.id}.task.txt`),questions.get(task.id)!);
           await writeFile(path.join(out,`${task.id}.assertions.json`),JSON.stringify(assertionsFor(task),null,2));
@@ -145,12 +148,15 @@ async function main() {
           const control={...stored,final:JSON.stringify({claims:[{id:task.id,answer:!task.answer,evidence:task.evidence}]})};
           negative={label:'synthetic negative control; excluded from model statistics',...evaluate(control,assertionsFor(task))};
           if(negative.verdict!=='failed')throw new Error('Negative control unexpectedly passed');
+          // 负向控制单独落盘：回归阶段是新的一次调用，不会重建它，但归档里必须有它。
+          await writeFile(path.join(out,'negative-control.json'),JSON.stringify(negative,null,2));
         }
       }
     } else {
       for(const task of tasks) {
         const stored=await readMaybe(path.join(out,`${task.id}.record.json`));
-        if(!stored||!stored.complete) throw new Error(`缺少可用的录制（先跑 --phase record）：${task.id}`);
+        // 录制阶段被上限截断时，这些格子的样本从未启动：如实标成 not_started，而不是编一个结论。
+        if(!stored||!stored.complete) {for(const arm of ARMS) for(let sample=1;sample<=samples;sample++) notStarted.push({task:task.id,arm,sample,reason:'record_missing'});continue;}
         records.set(task.id,stored);
       }
     }
@@ -161,9 +167,26 @@ async function main() {
       console.log(JSON.stringify({estimate:path.join(out,'estimate.json'),...estimate},null,2));
       return;
     }
+    if(phase==='all') {
+      // 预告：录制已经完成，回归还没开始。这一步免费，且它真的会把关——预估超出声明的上限，
+      // 后面的格子一个都不启动（它们会如实记成 not_started，而不是跑出去再说）。
+      const remaining=ledger.remaining();
+      const batch=estimateBatch([...records].map(([task,bundle])=>({task,calls:liveCalls(bundle)})),samples*ARMS.length);
+      const overCost=declared&&batch.cost_usd!=null&&remaining.max_cost_usd!=null&&batch.cost_usd>remaining.max_cost_usd;
+      const overCalls=declared&&remaining.max_model_calls!=null&&batch.model_calls>remaining.max_model_calls;
+      gate={...batch,remaining_allowed:remaining,over_budget:Boolean(overCost||overCalls)};
+      await writeFile(path.join(out,'estimate.json'),JSON.stringify({...gate,declared:declared??null,samples,arms:[...ARMS],tasks:[...records.keys()]},null,2));
+      console.log(JSON.stringify({estimate:{model_calls:gate.model_calls,cost_usd:gate.cost_usd,over_budget:gate.over_budget,detail:gate.detail}}));
+      if(gate.over_budget) {
+        stopReason='预估超出声明的上限，回归阶段没有启动：'+gate.detail;
+        for(const task of tasks) for(const arm of ARMS) for(let sample=1;sample<=samples;sample++)
+          notStarted.push({task:task.id,arm,sample,reason:'estimate_over_budget'});
+      }
+    }
     // ---------------- 回归矩阵 ----------------
     if(!provider||!model) throw new Error('--provider and --model are required to regress');
     for(const task of tasks) {
+      if(gate?.over_budget) break;
       const stored=records.get(task.id)!;
       const assertions=assertionsFor(task);
       for(const arm of ARMS) for(let sample=1;sample<=samples;sample++) {
@@ -174,6 +197,7 @@ async function main() {
         await run({bundle:child,parent:stored,toolSource:toolSource as 'recorded'|'snapshot',
           root:toolSource==='snapshot'?checkout.root:undefined,
           authPath:values['auth-path'],modelsPath:values['models-path'],budget:cell??undefined});
+        ledger.mergeCell(child.budget);
         const evaluation=evaluate(child,assertions);child.verdict=evaluation.verdict;
         const saved=await save(path.join(out,`${task.id}.${arm}.${sample}.json`),child);
         const transport=await upload(saved,endpoint);
@@ -184,8 +208,11 @@ async function main() {
     }
   } finally {
     try{await checkout.close();}catch(e){stopReason=`Checkout retained: ${String(e)}`;}
+    if(!negative) negative=await readMaybe(path.join(out,'negative-control.json'));
     const usage=ledger.usage();
-    const batch=declared?{declared,usage:{...usage,detail:batchUsageDetail(usage,notStarted.length)},
+    const reasonText=notStartedReasonText(notStarted.map(n=>n.reason??'budget_exhausted'));
+    const batch=declared?{declared,usage:{...usage,detail:batchUsageDetail(usage,notStarted.length,reasonText)},
+      not_started_reasons:[...new Set(notStarted.map(n=>n.reason??'budget_exhausted'))],
       not_started:notStarted.length,not_started_cells:notStarted}:null;
     const samplesPlanned=tasks.length*ARMS.length*samples;
     const manifest={
@@ -196,6 +223,7 @@ async function main() {
       prompts:{baseline_sha256:hash(prompts.baseline),grounded_sha256:hash(prompts.grounded)},
       tool_source:toolSource,samples_per_arm:samples,phase,arms:[...ARMS],samples_planned:samplesPlanned,
       declared_budget:declared??null,
+      estimate:gate??null,
       models_path:values['models-path']?path.relative(process.cwd(),String(values['models-path'])):null,
       negative_control:negative??null,
     };

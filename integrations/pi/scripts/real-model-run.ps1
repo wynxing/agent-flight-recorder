@@ -94,22 +94,23 @@ if ($CheckOnly) {
 }
 
 # ---------------------------------------------------------------- 4. record（花钱，带声明上限）
-Invoke-Phase @('--phase','record','--samples',"$Samples",'--budget-models',"$BudgetModels",'--budget-cost-usd',"$BudgetCostUsd")
-
 # ---------------------------------------------------------------- 5. estimate（免费）
-Invoke-Phase @('--phase','estimate','--samples',"$Samples")
-$estimate = Get-Content (Join-Path $outDir 'estimate.json') -Raw | ConvertFrom-Json
-if ($null -eq $estimate.cost_usd) { throw "预估无法定价（成本未知）：$($estimate.detail)  不拿未知当成 0，也不在没有预估的情况下开跑。" }
-if ($estimate.cost_usd -gt $BudgetCostUsd) { throw "预估 $($estimate.cost_usd) 超出声明的上限 `$$BudgetCostUsd：缩小任务集或采样数后再跑。" }
-if ($estimate.model_calls -gt $BudgetModels) { throw "预估 $($estimate.model_calls) 次调用超出声明的上限 $BudgetModels：缩小任务集或采样数后再跑。" }
-Write-Host "预估通过：$($estimate.model_calls) 次调用、约 `$$($estimate.cost_usd)（估算，上限 `$$BudgetCostUsd）" -ForegroundColor Green
-
 # ---------------------------------------------------------------- 6. regress（花钱，硬停）
-Invoke-Phase @('--phase','regress','--samples',"$Samples",'--budget-models',"$BudgetModels",'--budget-cost-usd',"$BudgetCostUsd")
+# 录制与回归在**同一次**执行里跑：一份账本盖住两个阶段，上限因此是整轮的上限，而不是每阶段各一份。
+# 录完之后、回归之前会免费生成预估，并按声明的额度把关（超了就不启动回归，如实标成 not_started）。
+Invoke-Phase @('--phase','all','--samples',"$Samples",'--budget-models',"$BudgetModels",'--budget-cost-usd',"$BudgetCostUsd")
 
 $archive = Get-Content (Join-Path $outDir 'archive.json') -Raw | ConvertFrom-Json
+$sampleCalls = ($archive.samples | Measure-Object -Property modelCalls -Sum).Sum
+$recordCalls = ($archive.records | Measure-Object -Property modelCalls -Sum).Sum
+$sampleTokens = ($archive.samples | Measure-Object -Property @{Expression={$_.tokens.total}} -Sum).Sum
+$recordTokens = ($archive.records | Measure-Object -Property @{Expression={$_.tokens.total}} -Sum).Sum
+$sampleCost = ($archive.samples | Measure-Object -Property @{Expression={if ($null -eq $_.costUsd) { 0 } else { $_.costUsd }}} -Sum).Sum
+$recordCost = ($archive.records | Measure-Object -Property @{Expression={if ($null -eq $_.costUsd) { 0 } else { $_.costUsd }}} -Sum).Sum
 Write-Host ''
 Write-Host '本轮实际发生（来自归档，不是估算）：' -ForegroundColor Cyan
-Write-Host "  真实模型调用：$($archive.batch.usage.model_calls_used) 次；成本（按本地价目估算）：`$$($archive.batch.usage.cost_used_usd)"
+Write-Host "  录制 $recordCalls 次调用 / $recordTokens token；回归 $sampleCalls 次调用 / $sampleTokens token"
+Write-Host "  合计 $($recordCalls + $sampleCalls) 次真实模型调用 / $($recordTokens + $sampleTokens) token；成本（按本地价目估算）：`$$([Math]::Round($recordCost + $sampleCost, 6))"
+Write-Host "  批次账目：已用 $($archive.batch.usage.model_calls_used) 次 / `$$($archive.batch.usage.cost_used_usd)"
 Write-Host "  是否触顶：$($archive.batch.usage.exceeded)；触顶维度：$($archive.batch.usage.stopped_by)；未启动格子：$($archive.batch.not_started)"
 Write-Host "  归档：$outDir/archive.json；报告：$outDir/report.md"

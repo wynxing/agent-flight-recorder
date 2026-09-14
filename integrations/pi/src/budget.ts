@@ -99,6 +99,20 @@ export class BudgetLedger {
     return { max_cost_usd: cost, max_model_calls: calls };
   }
 
+  /**
+    * 把**已经跑完的一格**的记账并入这份账本：整批的「已用」是各格之和，不是重新数的第二套口径。
+    * 一格的成本未知（有调用无法定价）时，整批的成本也就是未知——未知不会被当成 0。
+    */
+  mergeCell(usage: {model_calls_used: number; cost_used_usd: number | null} | null | undefined): void {
+    if (!usage) return;
+    this.modelCallsUsed += usage.model_calls_used;
+    if (usage.cost_used_usd == null) {
+      this.costUnknown = true;
+      return;
+    }
+    this.cost += usage.cost_used_usd;
+  }
+
   /** 已用 / 上限 / 是否触顶。触顶 = 这次执行**因触顶而停止**，只看真的停在哪一维。 */
   usage(): BudgetUsage {
     const usage: BudgetUsage = {
@@ -166,17 +180,34 @@ export const NOT_STARTED = 'not_started';
 export const NOT_STARTED_REASON = '因批次预算用尽';
 export const NOT_STARTED_LABEL = `未启动（${NOT_STARTED_REASON}）`;
 
+/** 没启动的其它真实原因。措辞与控制台的固定句并存：只有「预算用尽」时才用那句。 */
+export const NOT_STARTED_PHRASES: Record<string, string> = {
+  budget_exhausted: NOT_STARTED_REASON,
+  estimate_over_budget: '预估超出声明的上限',
+  record_missing: '没有可用的录制',
+};
+
+/**
+ * 把「这些格子为什么没启动」翻成一句人话。只有一种原因且它是预算用尽时，逐字沿用
+ * 平台那句固定措辞；出现别的原因时如实说出是哪一个，不拿「预算用尽」一句话盖住。
+ */
+export function notStartedReasonText(reasons: string[]): string {
+  const distinct = [...new Set(reasons.map(reason => reason || 'budget_exhausted'))];
+  if (distinct.length === 1 && distinct[0] === 'budget_exhausted') return NOT_STARTED_REASON;
+  return distinct.map(reason => NOT_STARTED_PHRASES[reason] ?? reason).join('、');
+}
+
 /**
  * 整批记账的说明：单次那一句 + 「多少格没跑、为什么」。
  * 触顶时这里不会出现「跑完了」「全部通过」「拿不到结论」这类措辞：没跑的格子既不是
  * 通过，也不是「跑过了但拿不到结论」——它们只是没跑。
  */
-export function batchUsageDetail(usage: BudgetUsage, notStarted: number): string {
+export function batchUsageDetail(usage: BudgetUsage, notStarted: number, reason: string = NOT_STARTED_REASON): string {
   const detail = usageDetail(usage);
   if (!notStarted) return detail;
   return (
     detail +
-    `整批有 ${notStarted} 个格子${NOT_STARTED_LABEL}，` +
+    `整批有 ${notStarted} 个格子未启动（${reason}），` +
     '它们从未执行，因此没有任何结论，也不计入未通过或无法判断。'
   );
 }
