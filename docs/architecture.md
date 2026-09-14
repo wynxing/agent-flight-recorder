@@ -51,7 +51,8 @@ Run 状态保持原有枚举，用例状态增加 `inconclusive`。SQLite 字符
 ## 2. 分层与依赖方向
 
 ```
-examples/langgraph_sre_agent      示例 Agent + 平台可发现的注册信息
+examples/langgraph_sre_agent      示例 Agent（LangGraph）+ 平台可发现的注册信息
+examples/openai_agents_sre_agent 示例 Agent（OpenAI Agents SDK），同一份场景
         |
         v
 server/afr_server                 FastAPI、存储、调度、差异、断言
@@ -66,6 +67,10 @@ web/                              独立前端，只通过 HTTP 契约耦合
 
 这条约束是刻意的，它保证 SDK 能被单独装进任何 Agent 进程，不需要为了录制而拖进一个 Web 框架。
 `sdk` 的核心包只依赖 `pydantic`；LangChain / LangGraph 相关代码全部走惰性导入，因此不用框架的用户也能使用录制器与回放引擎。
+
+第二个框架（OpenAI Agents SDK）接入后这条约束由 `replay/adapters.py` 继续守着：那张表存的是
+**模块路径**而不是模块对象，因此 `import agent_flight_recorder` 不会把任何一个框架拖进来
+（`sdk/tests/test_replay_adapters.py` 用子进程核对这一点）。
 
 ---
 
@@ -327,7 +332,61 @@ JSON 列（`input` / `output` / `attributes` / `summary`）存结构化内容；
 回放上下文的判定（`ensure_replay_context`）都在这层，因此不依赖框架也能被单元测试覆盖；
 适配层只负责据此驱动一次执行。
 新框架需要实现的是一个适配层，职责只有两件：拦截每一步、按计划返回录制结果或真实执行。
-LangGraph 的实现见 `replay/langgraph_adapter.py`，可作为参照。
+LangGraph 的实现见 `replay/langgraph_adapter.py`，第二个框架（OpenAI Agents SDK）见
+`replay/openai_agents_adapter.py`：两者接管方式不同，正好可以互相参照。
+
+**框架适配边界**（第二个框架接入时才补上的那一层）
+
+在这之前「框架无关」只到核心为止：平台侧直接 import 了 LangGraph 适配层，Agent 注册表里
+也没有任何字段说明「这个 Agent 该用哪个适配器重建」，于是「框架无关」在服务平台那一层
+并不成立。现在：
+
+* `AgentSpec.runtime` 由 Agent 包自己声明（默认 `langgraph`，因此既有 Agent 的回放路径不变）；
+* `replay/adapters.py` 把 runtime 解析成适配器模块：未知取值是配置错误，依赖缺失报「缺哪个包」，
+  两者都不回落到「猜一个框架」；
+* `server/afr_server/replay_runner.py` 按声明选适配层，自己不再认识任何具体框架。
+
+适配器模块的契约（两个实现都满足）：
+
+```
+run_replay(*, session, recorder, agent_factory, tool_side_effects, ...) -> ReplayResult
+```
+
+`agent_factory` 的调用约定由适配器自己定义（LangGraph 侧传 `middleware=`，Agents SDK 侧直接
+替换 `Agent.model` 与 `Agent.tools`），因此 `AgentSpec.build` 不需要知道框架细节。
+
+| 面向 | LangGraph 适配层 | OpenAI Agents SDK 适配层 |
+| --- | --- | --- |
+| 模型调用拦截 | `AgentMiddleware.wrap_model_call` | 实现 Model 协议（`get_response`） |
+| 工具调用拦截 | `AgentMiddleware.wrap_tool_call` | 替换 `FunctionTool.on_invoke_tool` |
+| 步边界状态 | `before_model(state)` 回调 | 模型请求的 `input` 条目（就是那一刻的状态） |
+| 循环上限 | `config["recursion_limit"]` | `Runner.run(max_turns=...)` |
+| 工具异常 | 冒到中间件上，可如实记录 | 默认被换成给模型看的文本，靠 SDK 留下的标记识别 |
+| 失败收尾与成因 | 共用 `replay/boundary.py`：从异常链恢复成因 | 同左（Agents SDK 会把引擎异常包一层 `UserError`） |
+
+两个适配层共用 `replay/boundary.py` 的成因恢复与失败收尾，因此「同一份录制在两个框架上回放、
+结论一致」不是靠两边各写对一遍来保证的。工具失败另有一条框架差异：Agents SDK 默认把工具异常
+换成一句给模型看的文本（Agent 行为不变），录制与回放靠 `sdk_converted_a_failure` 识别并记成失败；
+**Agent 自己配置了 `failure_error_function` 时无法区分**（框架把失败当成了它自己的取值语义），
+这一条如实留在未验证面里。
+
+**这条边界验证到哪一层**（如实标注，不把「已验证的边界」写成「已证明」）：
+
+* 已验证：录制 → 复现 → 回归 → 对比 → 用例判定的整条闭环在两个框架上都跑得通；同一份录制
+  分别用两个适配层回放，**参与位置对齐的语义内容（行为指纹）与最终产出相等**；复现模式不产生
+  任何真实调用；副作用闸门默认拦截、显式允许时真实执行并留警告；成因分类与预算触顶的语义一致。
+  证据是两个 example 的离线端到端测试，以及 `sdk/tests/test_replay_adapters.py`、
+  `sdk/tests/test_replay_openai_agents.py`。
+* **不是**「除运行时字段外逐字段相等」：框架自己的消息与状态外壳（`input.messages`、
+  `output.message`、`output.state`）在两个框架里本来就不一样（LangChain 是 `AIMessage` 的 dict，
+  Agents SDK 是 Responses API 的条目），运行身份字段（`id` / `run_id` / `started_at`）每次回放也都是新的。
+  跨框架的字段级边界由 `examples/openai_agents_sre_agent/tests/test_agents_scenario.py::
+  test_cross_framework_difference_is_confined_to_the_framework_envelope` 逐字段钉住：差异只允许落在这两类字段上，
+  `side_effect` / `error` / `tokens` / `attributes` 等语义字段一个都不许不同。
+* 未验证：流式调用（`Runner.run_streamed` / `stream_response`——适配层直接报错，不做静默丢事件）、
+  真实模型（本轮全程离线剧本模型，零成本）、handoffs / guardrails / MCP / 会话持久化等 Agents SDK
+  特性、多 Agent 协作与并行工具调用、以及上面那条自定义 `failure_error_function` 的失败识别。
+  接入第三个框架（自研 Runtime）时，这些面仍可能暴露新的抽象缺口。
 
 **接入一个新的 Agent**
 
@@ -360,12 +419,16 @@ my-agent = "my_package.agent:agent_spec"
 | SDK 单元 | `sdk/tests/` | 协议模型与策略解析、脱敏规则、序列化健壮性、录制链路的不抛异常保证、回放引擎的框架无关部分 |
 | 服务端 | `server/tests/` | 入库与去重、脱敏、API 契约、差异计算、断言求值、用例执行 |
 | 端到端 | `examples/langgraph_sre_agent/tests/` | 真实 LangGraph Agent 跑完"录制 -> 复现 -> 回归 -> 对比 -> 用例"整条链路 |
+| 端到端（第二框架） | `examples/openai_agents_sre_agent/tests/` | 同一套闭环在 OpenAI Agents SDK 上重跑，并做跨框架对比：两个框架录出的**行为指纹**（语义内容）一致；同一份录制用两个适配层回放，行为指纹与最终产出都相等，且差异只落在框架外壳与运行身份字段上 |
 
 **最重要的一条是复现模式的确定性测试。** 它断言除时间戳、ID 与 `effect_source` 外，
-回放与父 Run 的行为内容逐字段一致。这条过不了，后面所有能力都不成立。
+回放与父 Run 的**语义内容（行为指纹）与最终产出**一致。这条过不了，后面所有能力都不成立。
 
 端到端测试刻意用真实的 LangGraph Agent 与真实的 mock 工具，而不是打桩的假流程，
 因为回放要验证的恰恰是框架交互这一层。
+
+两个 example 的端到端测试都全程离线（脚本模型 + 关掉 tracing），不需要任何模型凭证：
+「离线可跑」因此不是靠环境碰巧干净，而是进 `scripts/test.ps1` / CI 的一条真实步骤。
 
 ---
 
@@ -373,7 +436,7 @@ my-agent = "my_package.agent:agent_spec"
 
 | 项 | 说明 | 影响 |
 | --- | --- | --- |
-| 只有一条框架适配路径经过验证 | 回放核心号称框架无关，但LangGraph 与 pi SDK 有离线契约测试，真实模型结果另见验证记录 | 第二个框架接入时可能发现抽象漏了点东西 |
+| 框架适配层有两条路径经过验证，但不覆盖全部调用形态 | 回放核心的框架无关性已由第二个框架（OpenAI Agents SDK）的离线闭环支撑：两个框架录出的**行为指纹**（语义内容）一致；同一份录制用两个适配层回放，行为指纹与最终产出相等，差异只落在框架消息外壳与运行身份字段（第 8 节「这条边界验证到哪一层」）。**流式调用、真实模型、handoffs / guardrails / MCP、自定义 `failure_error_function` 的失败识别都还没验证过** | 未验证的那几面接入时仍可能暴露新的抽象缺口；这类缺口一旦出现，按本轮的处置方式修实现并补会真变红的测试 |
 | 回放中间状态全在内存 | 超大运行的回放可能吃紧 | 长任务场景需要评估落盘 |
 | 预算只到「单批」这一层 | 单次回放与整批都可声明上限（整批按剩余额度逐格执行、触顶的格子如实标注未启动），但没有跨批次的预算池 / 配额 | 跨团队或长期运行的配额分配需要另做，不是当前能力 |
 | Diff 未缓存 | 每次请求重新计算 | 运行很大时响应变慢 |
@@ -390,6 +453,8 @@ sdk/agent_flight_recorder/
   models.py              协议数据模型与 EffectPolicy 解析（服务端复用）
   recorder.py            录制器、缓冲、上报、doctor 自检
   middleware.py          LangChain 接入层（拦截模型与工具调用）
+  openai_agents.py       OpenAI Agents SDK 接入层（Model 协议 + FunctionTool 包装）
+  identifiers.py         运行时对象 -> 稳定标识（框架无关，两个接入层共用）
   registry.py            Agent 注册表（entry point 发现）
   side_effects.py        工具副作用声明与解析
   redact.py              脱敏规则（SDK 与服务端共用）
@@ -401,7 +466,10 @@ sdk/agent_flight_recorder/
     engine.py            框架无关核心：策略解析、步骤计划、会话状态
     effects.py           父 Run 的录制效果库（按名称与参数匹配）
     fork.py              行为步骤定义与分叉判定
+    boundary.py          边界层：成因恢复、失败收尾、Run 头写入（两个适配层共用）
+    adapters.py          runtime -> 适配器模块的解析表（惰性导入，核心不拖进框架）
     langgraph_adapter.py LangGraph 适配层与回放驱动
+    openai_agents_adapter.py  OpenAI Agents SDK 适配层与回放驱动
 
 server/afr_server/
   main.py                FastAPI 应用与全部端点
@@ -427,4 +495,10 @@ examples/langgraph_sre_agent/
   sre_agent/tools.py     自带 mock 的 SRE 工具集
   sre_agent/scripted_model.py  离线确定性模型（两套剧本）
   sre_agent/prompts.py   默认版与修正版 Prompt
+
+examples/openai_agents_sre_agent/
+  oa_sre_agent/agent.py   示例 Agent 构建与平台注册（runtime = openai-agents）
+  oa_sre_agent/tools.py   同一批 SRE 工具的 Agents SDK 版（返回同一份数据）
+  oa_sre_agent/scripted_model.py  实现 Model 协议的离线剧本模型
+  oa_sre_agent/prompts.py 与 LangGraph 版共用同一份场景文本
 ```

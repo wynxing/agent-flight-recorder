@@ -2,6 +2,10 @@
 
 本地 MVP 中由服务端作为宿主执行回放（见 docs/replay-semantics.md 第 6 节）。
 回放引擎本身位于 SDK 内，真实用户完全可以脱离平台在自己的进程里跑。
+
+适配层按 Agent 自己声明的 runtime 选择：平台不再假设所有 Agent 都在 LangGraph 上。
+这条能力是第二个框架接入时才补上的——在那之前，本模块直接 import 了
+langgraph_adapter，于是「回放核心框架无关」在服务平台这一层并不成立。
 """
 
 from __future__ import annotations
@@ -21,10 +25,19 @@ from agent_flight_recorder.models import (
     utcnow,
 )
 from agent_flight_recorder.recorder import Recorder
-from agent_flight_recorder.replay.budget import BudgetLedger, ReplayEstimate, estimate_replay_budget
-from agent_flight_recorder.replay.engine import ReplayPlan, ReplaySession
-from agent_flight_recorder.replay.engine import ReplayExhaustedError, ensure_replay_context
-from agent_flight_recorder.replay.langgraph_adapter import apply_plan_to_recorder, run_replay
+from agent_flight_recorder.replay.adapters import DEFAULT_ADAPTER, load_adapter
+from agent_flight_recorder.replay.boundary import apply_plan_to_recorder
+from agent_flight_recorder.replay.budget import (
+    BudgetLedger,
+    ReplayEstimate,
+    estimate_replay_budget,
+)
+from agent_flight_recorder.replay.engine import (
+    ReplayExhaustedError,
+    ReplayPlan,
+    ReplaySession,
+    ensure_replay_context,
+)
 from agent_flight_recorder.replay.reasons import InconclusiveCode, InconclusiveReason
 
 from .agents import resolve_agent_spec
@@ -36,6 +49,29 @@ from .transport import DirectTransport
 logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="afr-replay")
+
+
+def run_replay(
+    *,
+    session: ReplaySession,
+    recorder: Recorder,
+    agent_factory: Any,
+    tool_side_effects: dict[str, Any] | None = None,
+    runtime: str | None = None,
+):
+    """按 runtime 选择适配层并驱动一次回放。
+
+    这里刻意保留一层薄封装（而不是直接调某个适配器）：服务端的调用点因此只有
+    一处知道「框架是 Agent 自己声明的」，用例与测试也可以整体替换掉这一步。
+    """
+
+    adapter = load_adapter(runtime or DEFAULT_ADAPTER)
+    return adapter.run_replay(
+        session=session,
+        recorder=recorder,
+        agent_factory=agent_factory,
+        tool_side_effects=tool_side_effects,
+    )
 
 
 def build_plan(
@@ -182,7 +218,7 @@ def prepare_run(
 def _run_job(plan: ReplayPlan, replay_run_id: str) -> None:
     try:
         execute_replay(plan, replay_run_id)
-    except Exception as exc:  # noqa: BLE001 - 后台任务必须吞掉异常并留下痕迹
+    except Exception as exc:
         logger.warning("replay job failed: %s", exc)
         _record_failure(plan, replay_run_id, exc)
 
@@ -230,12 +266,15 @@ def execute_replay(
     apply_plan_to_recorder(plan, recorder)
 
     session = ReplaySession(plan, parent_run, parent_events, shared_ledger=shared_ledger)
+    # 框架由 Agent 包自己声明（AgentSpec.runtime），平台据此选适配层。
+    runtime = getattr(spec, "runtime", None) or DEFAULT_ADAPTER
     try:
         result = run_replay(
             session=session,
             recorder=recorder,
             agent_factory=spec.build,
             tool_side_effects=spec.tool_side_effects,
+            runtime=runtime,
         )
     finally:
         recorder.close()
@@ -291,5 +330,5 @@ def _record_failure(plan: ReplayPlan, replay_run_id: str, exc: BaseException) ->
         )
         recorder.finish(status=RunStatus.FAILED)
         recorder.close(drain_timeout=2.0)
-    except Exception as inner:  # noqa: BLE001
+    except Exception as inner:
         logger.warning("failed to record replay failure: %s", inner)

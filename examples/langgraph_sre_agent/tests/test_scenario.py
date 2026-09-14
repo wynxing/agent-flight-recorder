@@ -34,7 +34,13 @@ def record_parent(run_id: str = "parent-run") -> str:
 
 
 def behavioral_fingerprint(events) -> list[tuple]:
-    """除时间戳、ID 与 effect_source 之外的行为内容指纹。"""
+    """参与位置对齐的语义内容指纹：事件类型、名称、工具参数、模型输出文本、工具调用。
+
+    这不是「全部字段」的比较：运行身份（id / run_id / started_at）、框架自己的消息外壳
+    （input.messages、output.message、output.state）以及 attributes 里的节点标注都会被
+    跳过——它们在回放里本来就会变（节点名、id、时间戳都是新的）。第 11 轮用第二个框架
+    复核这一点时实测过：即便是同一框架的录制与回放，这些字段也不相等。
+    """
 
     fingerprint = []
     for event in events:
@@ -105,7 +111,12 @@ def test_parent_run_ends_with_the_wrong_conclusion(parent_run: str) -> None:
 
 
 def test_reproduce_is_deterministic(parent_run: str) -> None:
-    """回放可信度的地基：除时间戳、ID 与 effect_source 外逐字段一致。"""
+    """回放可信度的地基：语义内容（行为指纹）与最终产出与父 Run 一致。
+
+    刻意不断言「除运行时字段外逐字段一致」：那条更强的话不成立（见 behavioral_fingerprint
+    的说明）。跨框架的字段级边界另有一条断言，见
+    examples/openai_agents_sre_agent/tests/test_agents_scenario.py。
+    """
 
     plan = ReplayPlan.reproduce(parent_run, from_seq=1)
     result = replay_runner.execute_replay(plan, "repro-run")

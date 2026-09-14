@@ -111,6 +111,11 @@ by_seq[seq]  >  by_kind[event_kind]  >  default  >  "recorded"
 
 回放引擎位于 SDK 内（`agent_flight_recorder.replay`），是框架无关的核心 + 框架适配层。本地 MVP 中由服务端作为宿主调用后台任务执行，这是本地部署的选择，不是架构限制：真实用户可以完全在自己的进程里加载历史 Run 并回放，把结果再上报回平台。
 
+宿主执行时按**Agent 自己声明的 runtime** 选适配层（`AgentSpec.runtime`，默认 `langgraph`），
+因此平台侧不需要认识任何具体框架：LangGraph 的 Agent 走 `langgraph_adapter`，OpenAI Agents SDK
+的 Agent 走 `openai_agents_adapter`，而两个适配层共用同一套成因恢复与失败收尾（`replay/boundary.py`）。
+适配边界与「验证到哪一层」见 `docs/architecture.md` 第 8 节。
+
 ## 7. 事件来源标注
 
 ### 7.1 pi 专用的第三种工具来源：快照重执行
@@ -192,7 +197,7 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 | `redacted_replay_data` | SDK `ReplaySession.validate_recording`（父 Run 或事件脱敏过） | pi `save`（落盘前命中脱敏规则） | 证据已脱敏，不再逐字可比 | 用未命中脱敏规则的录制重跑 |
 | `recording_loss` | SDK `validate_recording`（`metadata.afr_recording.complete = false`）；服务端 `replay_runner`（记录器丢事件 / 批次失败） | 解析兼容，暂无产生路径 | 录制方/记录器丢过事件 | 建议重新录制这次运行 |
 | `truncated_context` | SDK `validate_recording`（`message_count` 大于实存 messages） | pi `runner`（模型输出被长度上限截断） | 模型上下文或输出没有被完整保存 | 提高录制上限后重新录制 |
-| `missing_recorded_response` | SDK `recorded_model_response`、LangGraph 适配层 `_replay_tool_result` | pi `Tape.take`（找不到匹配的录制步骤） | 父 Run 没有这一步的录制结果 | 改用回归模式让工具真实执行 |
+| `missing_recorded_response` | SDK `recorded_model_response`；两个适配层共用的 `replay/boundary.py`（工具步骤没有匹配的录制结果） | pi `Tape.take`（找不到匹配的录制步骤） | 父 Run 没有这一步的录制结果 | 改用回归模式让工具真实执行 |
 | `missing_initial_state` | SDK `ensure_replay_context` | 解析兼容，暂无产生路径 | 父 Run 记了 input，但状态没恢复也没声明 task_only | 提供状态或显式声明只跑 task |
 | `model_context_changed` | 解析兼容，暂无产生路径 | pi `runner` 复现路径（模型上下文与录制不一致） | 模型上下文与录制不一致 | 确认模型 / Prompt 是否被改动 |
 | `final_output_changed` | 解析兼容，暂无产生路径 | pi `runner` 复现路径（复现结论与录制不同） | 复现结论与录制不同 | 看运行对比定位第一个分叉点 |

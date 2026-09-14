@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable, Sequence
 
 from langchain.agents.middleware import (
@@ -23,6 +22,7 @@ from langchain.agents.middleware import (
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ..cost import estimate_cost
+from ..identifiers import model_identifier
 from ..models import (
     ATTR_GATE,
     ATTR_NODE,
@@ -41,18 +41,21 @@ from ..models import (
 from ..recorder import Recorder
 from ..serialization import message_to_dict, text_of, to_jsonable, usage_to_tokens
 from ..side_effects import resolve_side_effect
-from ..middleware import model_identifier
+from .boundary import (
+    dry_run_text,
+    finish_failed_replay,
+    missing_recorded_result_cause,
+    step_attributes,
+)
 from .effects import RecordedModelResponse, RecordedToolResult
 from .engine import (
     ReplayExhaustedError,
-    ReplayPlan,
     ReplayResult,
     ReplaySession,
     StepPlan,
     ensure_replay_context,
     plan_summary,
 )
-from .reasons import InconclusiveCode, InconclusiveReason
 
 MAX_MESSAGES = 80
 NEWLINE = chr(10)
@@ -169,7 +172,7 @@ class ReplayMiddleware(AgentMiddleware):
             cost_usd=recorded.cost_usd,
             effect_source=EffectSource.RECORDED,
             source_seq=plan.parent_seq,
-            attributes=self._base_attributes(plan),
+            attributes=step_attributes(plan),
         )
         if event is not None:
             self.session.observe(event, plan.parent_seq)
@@ -214,7 +217,7 @@ class ReplayMiddleware(AgentMiddleware):
             started_at=started,
             ended_at=utcnow(),
             duration_ms=_elapsed_ms(started),
-            attributes=self._base_attributes(plan),
+            attributes=step_attributes(plan),
         )
         if event is not None:
             self.session.observe(event, plan.parent_seq)
@@ -230,7 +233,7 @@ class ReplayMiddleware(AgentMiddleware):
         if plan.mode is EffectMode.RECORDED:
             recorded = self.session.recorded_tool_result(name, args, parent_seq=plan.parent_seq)
             if recorded is None:
-                self.session.incomplete_reason = self._no_recording_cause(name, args)
+                self.session.incomplete_reason = missing_recorded_result_cause(name, args)
                 raise ReplayExhaustedError(self.session.incomplete_reason)
             message = to_tool_message(recorded, tool_call.get("id"))
             event = self.recorder.record(
@@ -241,7 +244,7 @@ class ReplayMiddleware(AgentMiddleware):
                 side_effect=side_effect,
                 effect_source=EffectSource.RECORDED,
                 source_seq=recorded.seq,
-                attributes=self._base_attributes(plan),
+                attributes=step_attributes(plan),
             )
             if event is not None:
                 self.session.observe(event, plan.parent_seq)
@@ -251,7 +254,7 @@ class ReplayMiddleware(AgentMiddleware):
             request,
             plan,
             source=EffectSource.DRY_RUN,
-            text=self._dry_run_text(name, args),
+            text=dry_run_text(name, args),
             reason=plan.reason or "dry_run",
             side_effect=side_effect,
         )
@@ -275,7 +278,7 @@ class ReplayMiddleware(AgentMiddleware):
             name=name or None,
             status="success",
         )
-        attributes = self._base_attributes(plan)
+        attributes = step_attributes(plan)
         attributes.update(
             {
                 ATTR_SYNTHETIC: True,
@@ -310,7 +313,7 @@ class ReplayMiddleware(AgentMiddleware):
         tool_call = request.tool_call or {}
         name = tool_call.get("name") or ""
         side_effect, _ = self._side_effect_for(request)
-        attributes = self._base_attributes(plan)
+        attributes = step_attributes(plan)
 
         if plan.reason == "side_effect_executed" and side_effect.is_mutating:
             attributes[ATTR_SEVERITY] = SEVERITY_WARNING
@@ -351,15 +354,6 @@ class ReplayMiddleware(AgentMiddleware):
 
     # ------------------------------------------------------------ 辅助
 
-    def _base_attributes(self, plan: StepPlan) -> dict[str, Any]:
-        attributes: dict[str, Any] = {ATTR_NODE: "replay"}
-        if plan.reason:
-            attributes[ATTR_REASON] = plan.reason
-        if plan.downgraded:
-            attributes[ATTR_GATE] = "side_effect_gate"
-            attributes[ATTR_SEVERITY] = SEVERITY_WARNING
-        return attributes
-
     def _side_effect_for(self, request: ToolCallRequest) -> tuple[SideEffect, str | None]:
         tool_call = request.tool_call or {}
         name = tool_call.get("name")
@@ -383,25 +377,6 @@ class ReplayMiddleware(AgentMiddleware):
             "message_count": len(messages),
         }
 
-    def _dry_run_text(self, name: str, args: Any) -> str:
-        head = f"[afr dry-run] 未真实执行 {name}。回放策略拦截了这一步的副作用。"
-        body = f"本应执行的操作参数: {json.dumps(args, ensure_ascii=False, default=str)}"
-        return head + NEWLINE + body
-
-    def _no_recording_cause(self, name: str, args: Any) -> InconclusiveReason:
-        """缺少录制结果时的成因：码是稳定的，散文只进 detail。
-
-        以前这里返回的是整句自然语言并被直接塞进 ``reason``，调用方因此无法判定。
-        """
-
-        detail = NEWLINE.join(
-            [
-                f"工具 {name} 的这次调用在父 Run 里没有匹配的录制结果，回放已偏离原始轨迹。",
-                f"本次调用参数: {json.dumps(args, ensure_ascii=False, default=str)}",
-                "如需继续，请改用回归模式让工具真实执行，或检查 Agent 行为为何改变。",
-            ]
-        )
-        return InconclusiveReason.from_code(InconclusiveCode.MISSING_RECORDED_RESPONSE.value, detail)
 
 
 # ---------------------------------------------------------------- Agent 驱动
@@ -469,30 +444,10 @@ def run_replay(
         result = agent.invoke(state, config=config)
         if session.incomplete_reason:
             raise ReplayExhaustedError(session.incomplete_reason)
-    except ReplayExhaustedError as exc:
-        # 成因已经从异常上带出来了：这里不再重新拼字符串，也不再另起一个名字。
-        recorder.record_error(exc, reason="replay_exhausted")
-        # 因预算停止不是「失败」，而是「没跑完」：Run 状态用 aborted（与 pi 侧对预算触顶
-        # 的处置一致），结论由成因码 budget_exceeded 表达，用例判定落到 inconclusive。
-        # 其余成因（录制不足等）保持原来的 failed，语义不变。
-        stopped_by_budget = exc.cause.code == InconclusiveCode.BUDGET_EXCEEDED.value
-        status = RunStatus.ABORTED if stopped_by_budget else RunStatus.FAILED
-        recorder.finish(status=status)
-        return session.to_result(
-            run_id=recorder.run_id,
-            status=status.value,
-            error=str(exc),
-            complete=False,
-            cause=exc.cause,
-        )
-    except Exception as exc:  # noqa: BLE001 - 回放失败必须产出可诊断的结果
-        recorder.record_error(exc)
-        recorder.finish(status=RunStatus.FAILED)
-        return session.to_result(
-            run_id=recorder.run_id,
-            status=RunStatus.FAILED.value,
-            error=f"{type(exc).__name__}: {exc}",
-        )
+    except Exception as exc:
+        # 失败收尾（含「成因从哪一层异常上取」）在边界层实现，两个适配层共用：
+        # LangGraph 原样抛出引擎异常，Agents SDK 会把它包一层，但结论必须一致。
+        return finish_failed_replay(session=session, recorder=recorder, exc=exc)
 
     final_output = final_text(result)
     recorder.finish(result=final_output)
@@ -516,20 +471,9 @@ def final_text(result: Any) -> str:
     return text_of(result)
 
 
-def apply_plan_to_recorder(plan: ReplayPlan, recorder: Recorder) -> Recorder:
-    """把回放的父子关系写进 Run 头。
-
-    回放是新的 Run，不是对旧 Run 的修改；父子关系靠 parent_run_id 表达。
-    """
-
-    recorder.run.parent_run_id = plan.parent_run_id
-    recorder.run.replay_from_seq = plan.from_seq
-    recorder.run.effect_policy = plan.policy
-    if plan.agent_version:
-        recorder.run.agent_version = plan.agent_version
-    if plan.prompt_version:
-        recorder.run.prompt_version = plan.prompt_version
-    return recorder
+# apply_plan_to_recorder 已移到 replay/boundary.py（它只写 Run 头字段，与框架无关，
+# 两个适配层共用一份实现）。这里保留同名导入，`from ...langgraph_adapter import
+# apply_plan_to_recorder` 的既有写法不受影响。
 
 
 # ---------------------------------------------------------------- 消息转换

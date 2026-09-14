@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from .models import ReplayPreset, SideEffect
 from .recorder import Recorder
+from .replay.adapters import DEFAULT_ADAPTER
 
 ENTRY_POINT_GROUP = "afr.agents"
 
@@ -57,6 +58,9 @@ class AgentSpec:
     tool_side_effects: dict[str, SideEffect] = field(default_factory=dict)
     # 追加在末尾：用位置参数构造 AgentSpec 的现有写法不受影响。
     seed_cases: list[SeedCase] = field(default_factory=list)
+    #: 这个 Agent 用哪个框架的适配层回放（取值见 replay/adapters.py）。默认值就是
+    #: 引入这个字段之前的行为：没声明的 Agent 一律按 LangGraph 适配层重建。
+    runtime: str = DEFAULT_ADAPTER
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -78,7 +82,7 @@ def load_agent_specs() -> dict[str, AgentSpec]:
         try:
             candidate = entry.load()
             spec = candidate() if callable(candidate) and not isinstance(candidate, AgentSpec) else candidate
-        except Exception:  # noqa: BLE001 - 单个插件坏了不能拖垮平台
+        except Exception:
             continue
         if isinstance(spec, AgentSpec):
             specs[spec.name] = spec
