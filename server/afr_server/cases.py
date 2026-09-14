@@ -31,6 +31,7 @@ from agent_flight_recorder.replay.reasons import (
 from sqlmodel import col, update
 
 from .assertions import AssertionSpec, evaluate_assertions
+from .case_versions import definition_digest_of, snapshot_of
 from .db import bound_db_path, session_scope
 from .replay_runner import build_plan, execute_replay, prepare_run
 from .storage import final_output_of, get_case, get_events, get_run
@@ -121,6 +122,60 @@ def _assertion_dict(item: AssertionSpec | dict[str, Any]) -> dict[str, Any]:
     return dict(item)
 
 
+#: 可以直接改写的标量字段。其余字段要么有解析过程（断言 / 策略），要么要校验存在性
+#: （source_run_id），各自在下面对应分支里处理。
+_PATCHABLE_SCALARS: tuple[str, ...] = ("name", "description", "from_seq", "to_seq")
+#: effect_policy 这一列里的四个键（见 create_case）。给一个就只改一个。
+_POLICY_KEYS: tuple[str, ...] = ("preset", "policy", "model", "system_prompt")
+
+
+def update_case(session: Any, case_id: str, *, patch: dict[str, Any]) -> CaseTable:
+    """改一条用例的定义。**只改给出的字段**，其余原样保留。
+
+    issue #24 需要「用例会被改动」这件事在真实闭环里可发生：在此之前用例没有任何写路径，
+    于是「历史结论归属哪一版定义」既触发不了、也验证不了。这里刻意保持最小：改的是定义
+    本身，不改任何一条已经落库的结论（结论的归属由 case_versions 固定）。
+    """
+
+    row = get_case(session, case_id)
+    if row is None:
+        raise ValueError(f"case not found: {case_id}")
+
+    for name in _PATCHABLE_SCALARS:
+        if name in patch:
+            setattr(row, name, patch[name])
+
+    if "source_run_id" in patch:
+        source_run_id = patch["source_run_id"]
+        if get_run(session, str(source_run_id)) is None:
+            raise ValueError(f"run not found: {source_run_id}")
+        row.source_run_id = str(source_run_id)
+
+    if "assertions" in patch:
+        row.assertions = [_assertion_dict(item) for item in (patch["assertions"] or [])]
+
+    if "labels" in patch:
+        row.labels = dict(patch["labels"] or {})
+
+    if any(name in patch for name in _POLICY_KEYS):
+        # 整列重新赋值而不是就地改字典：JSON 列的变更检测靠赋值，就地改键不会被提交。
+        policy = dict(row.effect_policy or {})
+        for name in _POLICY_KEYS:
+            if name not in patch:
+                continue
+            value = patch[name]
+            if name == "preset" and value is not None and not isinstance(value, str):
+                value = value.value
+            if name == "policy" and value is not None and not isinstance(value, dict):
+                value = value.model_dump(mode="json")
+            policy[name] = value
+        row.effect_policy = policy
+
+    session.add(row)
+    session.flush()
+    return row
+
+
 def submit_case_run(
     case_id: str,
     *,
@@ -149,6 +204,7 @@ def submit_case_run(
 def run_case_blocking(
     case_id: str,
     *,
+    definition: dict[str, Any] | None = None,
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
@@ -168,12 +224,17 @@ def run_case_blocking(
     on_started / on_result 是给批量套件的观察点：格子要在执行前就拿到回放 Run 的
     ID，执行后拿到结论与成因。单条执行路径不传它们，行为与以前逐字一致。
 
+    definition 也是给批量套件的：提交那一刻冻结的用例定义。传了它就不再读用例行——
+    批次执行期间用例被编辑，前半批与后半批也仍然跑同一份定义（见 suites.submit_suite）。
+    单条执行不传，行为与以前逐字一致：读当前行。
+
     shared_ledger 也是给批量套件的：整批的账本传下来，这一次执行里真正发生的模型调用
     会同时记进它。单条执行不传，账目只落在自己身上。
     """
 
     run_id, plan, snapshot = _prepare_case_run(
         case_id,
+        definition=definition,
         from_seq=from_seq,
         preset=preset,
         policy=policy,
@@ -198,6 +259,7 @@ def run_case_blocking(
 def _prepare_case_run(
     case_id: str,
     *,
+    definition: dict[str, Any] | None = None,
     from_seq: int | None = None,
     preset: ReplayPreset | None = None,
     policy: EffectPolicy | None = None,
@@ -205,13 +267,22 @@ def _prepare_case_run(
     model: str | None = None,
     system_prompt: str | None = None,
 ) -> tuple[str, ReplayPlan, dict[str, Any]]:
-    """准备好一次用例执行：占住 Case 状态、定下回放计划、先把 Run 行建出来。"""
+    """准备好一次用例执行：占住 Case 状态、定下回放计划、先把 Run 行建出来。
+
+    definition 给了就用它（批次提交那一刻冻结的定义），没给才读用例行。
+    """
 
     with session_scope() as session:
-        row = get_case(session, case_id)
-        if row is None:
-            raise ValueError(f"case not found: {case_id}")
-        snapshot = snapshot_of(row)
+        if definition is None:
+            row = get_case(session, case_id)
+            if row is None:
+                raise ValueError(f"case not found: {case_id}")
+            snapshot = snapshot_of(row)
+        else:
+            # 批次路径：**不回头读用例行**。这一句就是「前半批按旧断言、后半批按新断言」
+            # 那条路的封口——只要格子各自读当前行，批次执行期间的一次编辑就会把一批结论
+            # 悄悄劈成两个定义下的结果，而汇总与版本号还只有一个。
+            snapshot = dict(definition)
         run_id = new_id()
         # 新一次执行开始时就清掉上一次的条件，与清空断言结果同一个道理：执行中途
         # 停在「正在执行」上的那一刻，不该还挂着上一轮的前提。整条记录一并落下（见
@@ -225,6 +296,9 @@ def _prepare_case_run(
             last_run_at=utcnow(),
             last_results=[],
             last_condition=None,
+            # 定义摘要在结论产生的那一刻才写（见 _execute）：执行中的这一行不该挂着一个
+            # 还没成立的说法。
+            last_definition_digest=None,
         )
 
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
@@ -316,7 +390,15 @@ def _job(
             }
         ]
         cause = InconclusiveReason.from_code(InconclusiveCode.UNKNOWN.value, f"{type(exc).__name__}: {exc}")
-        _store(case_id, run_id, "error", results, cause, condition)
+        _store(
+            case_id,
+            run_id,
+            "error",
+            results,
+            cause,
+            condition,
+            definition_digest_of(snapshot),
+        )
         if on_result is not None:
             on_result("error", results, cause)
 
@@ -331,6 +413,9 @@ def _execute(
     condition: dict[str, Any] | None = None,
     shared_ledger: BudgetLedger | None = None,
 ) -> None:
+    # 这次执行用的是**哪一版定义**，与结论一起落库。用例被改过之后，用例页上那句
+    # 「最近一次结论」仍然说得清它是在哪一版定义下得出的，而不是看起来像在描述当前这份。
+    definition_digest = definition_digest_of(snapshot)
     # 没有整批账本时不多传参数：单条执行路径的调用方（含测试替身）签名因此一字未改。
     batch_args: dict[str, Any] = {"shared_ledger": shared_ledger} if shared_ledger is not None else {}
     result = execute_replay(plan, run_id, **batch_args)
@@ -383,26 +468,9 @@ def _execute(
             f"回放执行本身没有成功（status={result.status}）",
         )
     payload = [item.model_dump(mode="json") for item in results]
-    _store(case_id, run_id, verdict, payload, cause, condition)
+    _store(case_id, run_id, verdict, payload, cause, condition, definition_digest)
     if on_result is not None:
         on_result(verdict, payload, cause)
-
-
-def snapshot_of(case: CaseTable) -> dict[str, Any]:
-    policy = case.effect_policy or {}
-    return {
-        "id": case.id,
-        "name": case.name,
-        "source_run_id": case.source_run_id,
-        "from_seq": case.from_seq,
-        "to_seq": case.to_seq,
-        "assertions": list(case.assertions or []),
-        "labels": dict(case.labels or {}),
-        "preset": policy.get("preset"),
-        "policy": policy.get("policy"),
-        "model": policy.get("model"),
-        "system_prompt": policy.get("system_prompt"),
-    }
 
 
 def _preset(value: Any) -> ReplayPreset | None:
@@ -425,6 +493,7 @@ def _store(
     results: list[dict[str, Any]],
     cause: InconclusiveReason | None = None,
     condition: dict[str, Any] | None = None,
+    definition_digest: str | None = None,
 ) -> None:
     try:
         with session_scope() as session:
@@ -443,6 +512,8 @@ def _store(
                 # 入口允许直接传 Prompt 正文做覆盖（不带版本名），凭空补一个条件名会把一次
                 # 真实覆盖描述成「什么都没变」，那比留空更容易误导。
                 last_condition=dict(condition) if condition else None,
+                # 这一版定义的摘要：它是「这次结论是在哪一版用例定义下得出的」那句话本身。
+                last_definition_digest=definition_digest,
             )
     except Exception as exc:  # noqa: BLE001
         # 带上库名：这一句是「后台线程连到了别的库」时唯一的现场线索（engine 按当前设置

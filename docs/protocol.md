@@ -223,7 +223,7 @@ pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器
 ## 7. 批量套件
 
 批量运行（一次跑一批用例 × 一组条件）不改变上面的上报协议，它的契约只在服务端与控制台之间。
-五条约定是硬约束，不是实现细节：
+六条约定是硬约束，不是实现细节：
 
 1. **条件随结果记录。** 每个格子都带 `condition = {prompt, model, system_prompt, preset}`，
    `prompt` / `model` 由请求给出，`system_prompt` 是执行当时解析出来的 Prompt 正文，
@@ -253,23 +253,42 @@ pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器
    逐字一致。到点之后**不再启动新格子**，已启动的格子跑完并如实记账，没轮到的格子状态是
    `not_started`（呈现为「未启动（因批次预算用尽）」），它没有结论、没有成因，
    因此不计入 `failed`、也不计入 `undecided`，而是归在 `unfinished` 一侧。
+6. **结论归属于提交那一刻的用例集版本。** 提交时把这一批用到的用例定义固化成一份可寻址的版本
+   （`cs1:<内容摘要>`，见 architecture.md 第 4.5 节），套件与每个格子都带着它，按标识能反查
+   **当时**那一份定义。标识是内容决定的：只改一条用例的断言或起点就会得到另一个版本，同一份定义
+   跑两遍仍是同一版。**每格执行的是提交那一刻冻结的那一份快照**，执行期不再读用例行，因此
+   批次执行期间用例被编辑不会造成「前半批按旧断言、后半批按新断言，却报成一个数」。
+   `case_set.drift` 如实提示「这些用例自本批之后被改动过 / 已经找不到」，它只说用例页的内容
+   变了，**不改变本批任何一条结论的归属**。历史批次（版本化之前创建的）读出来是 `null`，
+   即「无版本记录」——不按当前用例反推一个版本号补上去。
 
 ```
 POST /v1/suites            {case_ids: [..] | all_cases: true, conditions: [{prompt, model}],
                             budget?: {max_cost_usd?, max_model_calls?}}
-                           -> {suite_id, status, total, conditions}     # 立即返回，执行在后台
+                           -> {suite_id, status, total, conditions, case_set_version}
+                              # 立即返回，执行在后台；归属在提交那一刻就已确定
 POST /v1/suites/estimate   {case_ids [..] | all_cases: true, conditions, budget?}
                            -> {cells, model_calls, cost_usd, cost_is_estimate, detail}
                               # 只读：不调用模型、不创建批次；成本给不出来时是 null + 原因
-GET  /v1/suites            -> {suites: [{id, status, total, completed, counts, errors, ...}]}
+GET  /v1/suites            -> {suites: [{id, status, total, completed, counts, errors,
+                                          case_set_version, ...}]}
 GET  /v1/suites/{id}       -> {id, status, total, completed, counts, errors,
                                budget: {max_cost_usd, max_model_calls, model_calls_used,
                                         cost_used_usd, cost_is_estimate, exceeded, stopped_by,
                                         cost_unknown, not_started, detail} | null,
+                               case_set: {id, canonicalization, case_count, recorded,
+                                          recorded_at, drift: {changed, missing, unchanged}} | null,
                                groups: [{condition, label, total, completed, counts,
                                          determinable, undecided, unfinished, not_started,
                                          determinable_rate, errors,
-                                         items: [{case_id, condition, status, run_id, results, cause}]}]}
+                                         items: [{case_id, case_set_version, condition, status,
+                                                  run_id, results, cause}]}]}
+GET  /v1/case-set-versions/{id}
+                           -> {id, canonicalization, case_count, recorded_at,
+                               cases: [{case_id, digest, definition: {source_run_id, from_seq,
+                                        to_seq, assertions, effect_policy}}]}
+                              # 某一版固化的定义：用例后来被改成什么样都不影响这里的内容
+PATCH /v1/cases/{id}       -> CaseItem   # 改用例定义（只改给出的字段）；已落库的结论一个字不动
 ```
 
 `label` 只描述这个条件**实际覆盖了**什么：没写模型就写「沿用用例自身模型」，不替它起一个
@@ -283,9 +302,15 @@ GET  /v1/suites/{id}       -> {id, status, total, completed, counts, errors,
 凭空补一个条件名会把一次真实覆盖描述成「什么都没变」）。
 
 **用例行的「最近一次结论」是整条写下去的。** 记录结论的那次写入，把 `last_status`、
-`last_run_id`、`last_run_at`、`last_results`、`last_cause`、`last_condition` 六个字段放进
-**同一条 UPDATE**；开始一次新执行的那次写入同样整条落下（它负责的是其中除了成因之外的五个）。
+`last_run_id`、`last_run_at`、`last_results`、`last_cause`、`last_condition`、
+`last_definition_digest` 七个字段放进
+**同一条 UPDATE**；开始一次新执行的那次写入同样整条落下（它负责的是其中除了成因的那几个，
+定义摘要也在其中：那一次还没有结论，也就还没有「哪一版定义得出的结论」这句话）。
 谁最后提交，这一整条记录就整个来自谁。
+
+其中 `last_definition_digest` 说的是「最近一次结论是在**哪一版定义**下得出的」。它与用例当前的
+`definition_digest` 不同时，说明这条结论不描述现在这份定义（用例被改过）；存量行没有这一列，
+读出来是 `null`，也就是「没有记录」——控制台在 `null` 时什么都不说，不拿「没记录」冒充「一致」。
 
 这不是实现细节，而是用例页那句「最近一次结论」的前提：一条用例在同一批里会被多个条件
 并发执行，每个格子都要写这一行。若按列合并（先读出行对象、改属性、只提交与读到的快照

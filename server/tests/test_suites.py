@@ -41,6 +41,9 @@ def _install_runner(monkeypatch: pytest.MonkeyPatch, plan: Callable[[str, dict],
 
     替换的是 suites 模块里的名字，因此被替换的只有「真跑一次回放」这一步：条件解析、
     格子落库、回调接线、聚合都还是真代码。
+
+    签名与真身逐字对齐，包括 `definition`（提交那一刻冻结的用例定义）。替身少收一个
+    关键字就会被 TypeError 打到格子上，测试立刻变红——替身与真身不允许各自演化。
     """
 
     from afr_server import suites
@@ -50,6 +53,7 @@ def _install_runner(monkeypatch: pytest.MonkeyPatch, plan: Callable[[str, dict],
     def runner(
         case_id: str,
         *,
+        definition: dict[str, Any] | None = None,
         preset: Any = None,
         model: str | None = None,
         system_prompt: str | None = None,
@@ -60,6 +64,7 @@ def _install_runner(monkeypatch: pytest.MonkeyPatch, plan: Callable[[str, dict],
         calls.append(
             {
                 "case_id": case_id,
+                "definition": definition,
                 "preset": preset,
                 "model": model,
                 "system_prompt": system_prompt,

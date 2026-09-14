@@ -18,6 +18,7 @@ from agent_flight_recorder.replay.budget import BudgetUsage
 from pydantic import BaseModel, Field
 
 from .assertions import AssertionResult, AssertionSpec
+from .case_versions import CANONICALIZATION, definition_digest_of_case
 from .diff import RunDiff
 from .storage import aware_utc
 from .tables import CaseTable
@@ -118,6 +119,12 @@ class CaseItem(BaseModel):
     last_cause: InconclusiveReason | None = None
     #: 最近一次执行用的条件（Prompt 版本 / 模型）；单条运行不携带条件时为 None。
     last_condition: dict[str, Any] | None = None
+    #: **当前**定义的摘要（判据相关那一面，见 case_versions.py）。它与套件版本里的成员
+    #: 摘要比对，就能回答「这条用例是不是还是那一版」——不需要自己去逐字段 diff。
+    definition_digest: str = ""
+    #: 最近一次执行**所用的那一版定义**的摘要。与 definition_digest 不同时，说明这条结论
+    #: 是在另一版定义下得出的；存量行（版本化之前跑的）没有它，如实为 None 而不是回填一个。
+    last_definition_digest: str | None = None
     created_at: datetime | None = None
     source_run: RunRecord | None = None
 
@@ -139,6 +146,26 @@ class CaseRunResponse(BaseModel):
     case_id: str
     run_id: str
     status: str = "running"
+
+
+class CaseUpdateRequest(BaseModel):
+    """用例定义的局部更新：**只改给出的字段**，没给的保持原样。
+
+    这组字段就是用例的定义本身（断言、起点、来源运行、副作用策略与其覆盖）。它刻意不含
+    `last_*` 这类执行记账：那些字段属于「跑出来的结果」，不该被外部改写。
+    """
+
+    name: str | None = None
+    description: str | None = None
+    source_run_id: str | None = None
+    from_seq: int | None = None
+    to_seq: int | None = None
+    assertions: list[AssertionSpec] | None = None
+    labels: dict[str, str] | None = None
+    preset: ReplayPreset | None = None
+    policy: EffectPolicy | None = None
+    model: str | None = None
+    system_prompt: str | None = None
 
 
 class SuiteCondition(BaseModel):
@@ -164,6 +191,8 @@ class SuiteSubmitResponse(BaseModel):
     status: str = "running"
     total: int
     conditions: list[SuiteCondition] = Field(default_factory=list)
+    #: 提交即刻就定下来的版本标识：请求返回时归属已经确定，不必等到批次跑完。
+    case_set_version: str | None = None
 
 
 class SuiteItem(BaseModel):
@@ -172,6 +201,8 @@ class SuiteItem(BaseModel):
     id: str
     case_id: str
     case_name: str
+    #: 这一格归属的用例集版本（提交那一刻固化的定义标识）。历史格子没有它，为 None。
+    case_set_version: str | None = None
     condition_key: str
     condition: dict[str, Any] = Field(default_factory=dict)
     status: str
@@ -224,6 +255,66 @@ class SuiteConditionGroup(BaseModel):
     items: list[SuiteItem] = Field(default_factory=list)
 
 
+class CaseSetDrift(BaseModel):
+    """本批提交之后，这一版用例集里的用例还是不是当时那一份。
+
+    它只影响提示，不影响归属：这一批的每一条结论都跑在提交那一刻冻结的定义上，用例后来被
+    改成什么样，都不会把已经跑出来的结论改写成另一个定义下的结果。
+    """
+
+    #: 定义已经变了的用例。changed + missing + unchanged 恒等于版本里的用例数。
+    changed: list[str] = Field(default_factory=list)
+    #: 行已经不在了的用例（换库、手工清理）。找不到了就说找不到了，不假装它没变。
+    missing: list[str] = Field(default_factory=list)
+    unchanged: int = 0
+
+
+class CaseSetRef(BaseModel):
+    """一批结果所属的用例集版本（提交那一刻固化的定义）。"""
+
+    id: str
+    canonicalization: str = CANONICALIZATION
+    case_count: int = 0
+    #: 这版定义是否已固化在库里、可以按 id 反查。正常情况下恒为 True；定义行缺失时如实为
+    #: False——那时既不能说「无版本记录」（标识明明在），也不能说定义还在。
+    recorded: bool = True
+    recorded_at: datetime | None = None
+    #: 用例自本批之后有没有被改过。定义行缺失时为 None（无从判断）。
+    drift: CaseSetDrift | None = None
+
+
+class CaseDefinition(BaseModel):
+    """一条用例里**判据相关**的那一面：能改变结论的字段（见 case_versions.py）。
+
+    展示用的名字、描述与筛选用的 labels 都不在这里：它们改不出任何一条不同的结论。
+    """
+
+    source_run_id: str
+    from_seq: int | None = None
+    to_seq: int | None = None
+    #: 固化时的断言（写入时已按 AssertionSpec 归一化）。用 Any 是因为摘要不该对存量数据的
+    #: 形状提要求：认不出的旧断言照原样返回，也不该让一次读取失败。
+    assertions: list[Any] = Field(default_factory=list)
+    effect_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaseSetVersionMember(BaseModel):
+    case_id: str
+    #: 这条用例在这一版里的定义摘要（cs1m:<hex>）。
+    digest: str
+    definition: CaseDefinition
+
+
+class CaseSetVersionResponse(BaseModel):
+    """按标识取回当时固化的用例定义（旧套件的可反查路径）。"""
+
+    id: str
+    canonicalization: str = CANONICALIZATION
+    case_count: int = 0
+    recorded_at: datetime | None = None
+    cases: list[CaseSetVersionMember] = Field(default_factory=list)
+
+
 class SuiteDetailResponse(BaseModel):
     id: str
     status: str
@@ -238,6 +329,8 @@ class SuiteDetailResponse(BaseModel):
     #: 整批的预算记账。没声明过整批上限时是 None：不设上限不等于「上限为 0」，
     #: 也不该凭空多出一个「上限：无」的账目。
     budget: SuiteBudgetUsage | None = None
+    #: 这批跑的是哪一版用例集。版本化之前创建的批次为 None（无版本记录，不伪造回填）。
+    case_set: CaseSetRef | None = None
     groups: list[SuiteConditionGroup] = Field(default_factory=list)
 
 
@@ -261,6 +354,8 @@ class SuiteSummary(BaseModel):
     created_at: datetime | None = None
     finished_at: datetime | None = None
     conditions: list[dict[str, Any]] = Field(default_factory=list)
+    #: 这批是哪一版用例。列表里就要能看出来：跨批次的比较建立在这个归属上。
+    case_set_version: str | None = None
     total: int
     completed: int
     counts: dict[str, int] = Field(default_factory=dict)
@@ -311,6 +406,10 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         last_condition=(
             dict(row.last_condition) if getattr(row, "last_condition", None) else None
         ),
+        # 当前定义的摘要：由这一行的内容算出来（纯函数），因此它永远与页面上看到的定义一致。
+        definition_digest=definition_digest_of_case(row),
+        # 最近一次结论是在哪一版定义下得出的。存量行没有这一列，如实是 None。
+        last_definition_digest=getattr(row, "last_definition_digest", None),
         created_at=aware_utc(row.created_at),
         source_run=source_run,
     )
@@ -348,10 +447,16 @@ def replay_meta_to_dict(meta: dict[str, Any] | None) -> dict[str, Any] | None:
 __all__ = [
     "AgentInfo",
     "CaseCreateRequest",
+    "CaseDefinition",
     "CaseItem",
     "CaseListResponse",
     "CaseRunRequest",
     "CaseRunResponse",
+    "CaseSetDrift",
+    "CaseSetRef",
+    "CaseSetVersionMember",
+    "CaseSetVersionResponse",
+    "CaseUpdateRequest",
     "ReplayEstimateResponse",
     "ReplayRequest",
     "ReplayResponse",

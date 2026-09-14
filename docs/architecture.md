@@ -92,6 +92,7 @@ Diff                            两个 Run 的计算视图，不持久化
 | `Run` | `sdk/.../models.py` `RunRecord` | 一次执行。回放时携带 `parent_run_id` / `replay_from_seq` / `effect_policy` |
 | `Event` | `sdk/.../models.py` `Event` | 追加写入，写入后不再修改。类型见协议文档 |
 | `Case` | `server/.../tables.py` `CaseTable` | 源运行 + 起点 + 模式 + 断言集 + 条件标签 |
+| `CaseSetVersion` | `server/.../case_versions.py` | 一次批量提交所用到的一组用例定义，按内容摘要寻址（见第 4.5 节） |
 | `Diff` | `server/.../diff.py` `RunDiff` | 纯计算，按需生成（当前未做缓存） |
 
 **回放不是独立的表。** 一个有 `parent_run_id` 的 Run 就是回放，这样父子血缘、列表筛选、对比都不需要额外机制。
@@ -155,6 +156,39 @@ POST /v1/cases/{id}/run
 给了新的 system prompt 却没有指定模式时，会自动按**回归模式**执行：
 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
 
+### 4.5 批量套件与用例集版本
+
+```
+POST /v1/suites
+  -> 读出这一批用到的用例行，**在提交这一刻**取一次定义快照（每格一份）
+     -> 对快照里「判据相关」的那一面算内容摘要 -> 用例集版本标识 cs1:<sha256>
+        -> 固化成 case_set_versions 的一行（标识即主键，同内容天然复用同一行）
+           -> 与套件行、格子行**同一个事务**写入（新套件不可能有标识却查不到定义）
+              -> 每格在后台按**自己那份快照**执行，执行期不再读用例行
+
+GET /v1/suites/{id}                    -> case_set: {id, case_count, recorded, drift}
+GET /v1/case-set-versions/{version_id} -> 当时固化的定义（逐条用例的 source_run_id / 起点 /
+                                          断言集 / 模式与模型覆盖）
+PATCH /v1/cases/{id}                   -> 改定义（只改给出的字段），已落库的结论一个字不动
+```
+
+**为什么在提交那一刻冻结，而不是每次执行时读当前行。** 批次是并发跑的，用例行又是可变的。
+如果每一格都读当前行，那么批次执行期间的一次编辑就会把一批结论悄悄劈成两个定义下的结果，
+而汇总、版本号、结论计数仍然只有一个——即「前半批按旧断言、后半批按新断言，却报成一个数」。
+冻结之后整批共享同一份定义，这个岔路在结构上就不存在（用例行被删掉也不影响：格子照样按冻结的
+定义给出结论）。
+
+**为什么版本只覆盖「判据相关」的那一面。** 计入的是 source_run_id、from_seq、to_seq、assertions
+与 effect_policy（preset / policy / model / system_prompt）。不计入名字、描述、labels 与 `last_*`：
+前三个改不出任何一条不同的结论（把改名算进去只会让每次改名都喊「用例变了」），而 `last_*` 每跑
+一次就变——算进去的话，同一份定义跑第二遍就会得到一个新版本，版本化立刻失去意义。
+规范化规则（字典键序无关、断言按 `AssertionSpec` 归一化、值里的空白有意义、断言列表顺序有意义、
+用例提交顺序无关）逐条钉在 `server/tests/test_suite_versions.py` 里。
+
+**归属与「用例变了」是两件事。** 归属永远在提交那一刻（版本标识 + 那版定义）；drift 只是如实提示
+「用例页现在看到的内容已经不是这一版了」。控制台把这两句一起说，因为只说后者会让读者以为这一批的
+结论也跟着变了。历史批次没有版本记录时读出来就是「无版本记录」，**不按当前用例反推一个版本号**。
+
 ---
 
 ## 5. 关键设计决策
@@ -177,6 +211,8 @@ POST /v1/cases/{id}/run
 | D12 | 「无法判断」的成因是跨层共享的闭集，码与说明分离 | 散文不能当码，三层不能各写各的名字 |
 | D13 | 副作用被拦与录制不完整给不同的 code | 一个去看录制质量，一个去看副作用策略 |
 | D14 | 成因归一化只做一次，且在服务端 | 控制台不再自建第二份解析与第三张码表 |
+| D15 | 批次的用例定义在**提交那一刻**冻结，每格按快照执行 | 执行期读可变行会让一批结论被编辑劈成两半 |
+| D16 | 用例集版本 = 判据相关字段的内容摘要（`cs1:` 前缀即规范化方案号） | 标识相同必然定义相同，「是不是同一版」不必事后比对；换算法换前缀，旧标识仍可解释 |
 
 ### 5.2 需要展开的几条
 
@@ -310,10 +346,21 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 | `runs` | `id`, `agent_name`, `status`, `parent_run_id`, `replay_from_seq`, `effect_policy`, `summary`, `event_count` | `parent_run_id` 建索引，便于查血缘 |
 | `events` | `id`, `run_id`, `seq`, `type`, `name`, `input`, `output`, `error`, `tokens`, `side_effect`, `effect_source` | **唯一约束 `(run_id, seq)`**，这是幂等性的物理保证 |
 | `cases` | `id`, `source_run_id`, `from_seq`, `assertions`, `effect_policy`, `last_status`, `last_results`, `last_cause` | `source_run_id` 建索引 |
+| `suites` | `id`, `status`, `case_ids`, `conditions`, `budget`, `budget_usage`, `case_set_version` | 生命周期由格子的状态推导，落库值只是缓存 |
+| `suite_items` | `id`, `suite_id`, `case_id`, `position`, `condition_key`, `condition`, `case_set_version`, `status` | **唯一约束 `(suite_id, case_id, condition_key)`**：一个套件里同一用例 × 同一条件只能有一格 |
+| `case_set_versions` | `id`（`cs1:<sha256>`，主键）, `canonicalization`, `case_count`, `cases` | 主键即内容摘要：**同一份定义只可能有一行**，版本可去重、可反查 |
 
 `cases.last_cause` 存最近一次结论的结构化成因（`{code, detail}`），契约为「结论不是 passed / failed 时非空」：
 只有结论没有成因，用户无从知道该去看录制质量、副作用策略还是执行本身。新增可空列的补齐由 `db._add_missing_columns` 在启动时做（可重入，SQLite 单文件），
 因此已有库不需要重建。
+
+`case_set_versions` 只存**判据相关**的那一面（见第 4.5 节），因此「版本行的内容重算之后必须等于它的
+标识」是一条可直接断言的不变量（`test_the_stored_version_content_recomputes_to_its_id`）。
+版本化新增的三个可空列（`suites.case_set_version`、`suite_items.case_set_version`、
+`cases.last_definition_digest`）走的是同一条补列路径；存量行补出来是 NULL，读出来就是
+「无版本记录」与「最近一次结论没有定义记录」——**不回填**，因为回填等于替历史批次编一个它从来没有的
+前提。新表由 `create_all` 在建库时创建，旧库直接补上即可（`server/tests/test_suite_versions.py`
+用「把库退回旧形态再跑一次启动迁移」的方式钉住了这条路径）。
 
 **事件表是 append-only 的**：代码里只有插入与存在性检查，没有任何更新路径。
 这是"回放可信"的前提：如果历史事件可以被改写，复现就失去意义。
@@ -439,6 +486,7 @@ my-agent = "my_package.agent:agent_spec"
 | 框架适配层有两条路径经过验证，但不覆盖全部调用形态 | 回放核心的框架无关性已由第二个框架（OpenAI Agents SDK）的离线闭环支撑：两个框架录出的**行为指纹**（语义内容）一致；同一份录制用两个适配层回放，行为指纹与最终产出相等，差异只落在框架消息外壳与运行身份字段（第 8 节「这条边界验证到哪一层」）。**流式调用、真实模型、handoffs / guardrails / MCP、自定义 `failure_error_function` 的失败识别都还没验证过** | 未验证的那几面接入时仍可能暴露新的抽象缺口；这类缺口一旦出现，按本轮的处置方式修实现并补会真变红的测试 |
 | 回放中间状态全在内存 | 超大运行的回放可能吃紧 | 长任务场景需要评估落盘 |
 | 预算只到「单批」这一层 | 单次回放与整批都可声明上限（整批按剩余额度逐格执行、触顶的格子如实标注未启动），但没有跨批次的预算池 / 配额 | 跨团队或长期运行的配额分配需要另做，不是当前能力 |
+| 用例集版本只解决「归属」 | 提交时固化定义、按内容摘要寻址、用例变更可见、批次中途被改不影响归属；**不做**跨版本的对比视图、版本迁移 / 合并 / 分支、可编辑的版本名。版本化之前创建的批次没有版本记录，读出来就是「无版本记录」（不回填） | 跨版本比较仍要人工看两份定义；历史批次的结论无法追溯归属 |
 | Diff 未缓存 | 每次请求重新计算 | 运行很大时响应变慢 |
 | 前端对齐可读性 | 两条运行步骤数差异很大时，对齐结果不易读 | 影响体验，不影响正确性 |
 | 单用户、无鉴权 | 只监听 localhost，无多租户字段 | 生产部署前必须补，属于已知的范围边界而非疏漏 |
@@ -477,6 +525,7 @@ server/afr_server/
   tables.py              表结构
   replay_runner.py       回放调度
   cases.py               用例创建与执行
+  case_versions.py       用例定义的规范化与用例集版本（内容决定的标识、固化、漂移）
   assertions.py          确定性断言
   diff.py                差异计算
   seed.py                首次启动播种（运行 + Agent 自带用例）

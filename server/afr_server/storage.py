@@ -23,7 +23,14 @@ from agent_flight_recorder.models import (
 from agent_flight_recorder.redact import redact
 from sqlmodel import Session, col, select
 
-from .tables import CaseTable, EventTable, RunTable, SuiteItemTable, SuiteTable
+from .tables import (
+    CaseSetVersionTable,
+    CaseTable,
+    EventTable,
+    RunTable,
+    SuiteItemTable,
+    SuiteTable,
+)
 
 
 def naive_utc(value: datetime | None) -> datetime | None:
@@ -296,6 +303,12 @@ def list_cases(session: Session, *, limit: int = 100) -> list[CaseTable]:
 
 def get_case(session: Session, case_id: str) -> CaseTable | None:
     return session.get(CaseTable, case_id)
+
+
+def get_case_set_version(session: Session, version_id: str) -> CaseSetVersionTable | None:
+    """按标识取回一个用例集版本（内容决定的可寻址标识，见 case_versions.py）。"""
+
+    return session.get(CaseSetVersionTable, version_id)
 
 
 def get_suite(session: Session, suite_id: str) -> SuiteTable | None:

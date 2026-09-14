@@ -31,7 +31,13 @@ from agent_flight_recorder.replay.budget import (
 )
 from agent_flight_recorder.replay.reasons import InconclusiveCode, InconclusiveReason
 
-from .cases import ResultHook, resolve_plan, run_case_blocking, snapshot_of
+from .case_versions import (
+    case_set_payload,
+    case_set_version_id,
+    record_version,
+    snapshot_of,
+)
+from .cases import ResultHook, resolve_plan, run_case_blocking
 from .db import session_scope
 from .storage import (
     aware_utc,
@@ -197,20 +203,39 @@ def submit_suite(
     """
 
     declared = budget if budget is not None and budget.is_set else None
+    #: 提交这一刻冻结的定义：键是 case_id，值是执行要用的整份快照。
+    frozen: dict[str, dict[str, Any]] = {}
 
     with session_scope() as session:
         cases = _resolve_targets(session, case_ids=list(case_ids or []), all_cases=all_cases)
         requested = _requested_conditions(conditions)
-        ordered_case_ids = [case.id for case in cases]
-        cells = [
-            (case.id, case.name, _cell_condition(session, case, requested_condition))
-            for case in cases
-            for requested_condition in requested
-        ]
+        ordered_case_ids: list[str] = []
+        cells: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
+        for case in cases:
+            ordered_case_ids.append(case.id)
+            # 每个格子拿到的是**这一份**快照。执行期不再读用例行：批次提交之后的任何一次
+            # 编辑都不该改变这一批已经定下的判据（见 case_versions.py 与 cases._prepare_case_run）。
+            frozen[case.id] = snapshot_of(case)
+            for requested_condition in requested:
+                cells.append(
+                    (
+                        case.id,
+                        case.name,
+                        frozen[case.id],
+                        _cell_condition(session, case, requested_condition),
+                    )
+                )
+        definitions = [frozen[case_id] for case_id in ordered_case_ids]
 
     suite_id = new_id()
-    queued: list[tuple[str, str, dict[str, Any]]] = []
+    # 版本标识是纯计算（内容决定），因此可以和套件、格子放进同一个事务。
+    case_set_version = case_set_version_id(definitions)
+    queued: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
     with session_scope() as session:
+        # 版本与套件同一个事务：新套件不可能出现「挂着版本标识、却反查不到定义」的状态。
+        # 标识即主键，因此重复提交同一份定义只会有同一行——「两个套件是不是同一版用例」
+        # 由标识本身回答，不需要事后比对。
+        record_version(session, definitions)
         session.add(
             SuiteTable(
                 id=suite_id,
@@ -220,12 +245,13 @@ def submit_suite(
                 # 声明的整批上限；没声明时是 None。记账对象与上限声明分开存：没有声明过
                 # 上限的批次不应该凭空多出一个「上限：无」的账目。
                 budget=declared.model_dump(mode="json") if declared else None,
+                case_set_version=case_set_version,
                 created_at=utcnow(),
             )
         )
-        for position, (case_id, case_name, condition) in enumerate(cells):
+        for position, (case_id, case_name, definition, condition) in enumerate(cells):
             item_id = new_id()
-            queued.append((item_id, case_id, condition))
+            queued.append((item_id, case_id, condition, definition))
             session.add(
                 SuiteItemTable(
                     id=item_id,
@@ -235,13 +261,15 @@ def submit_suite(
                     position=position,
                     condition_key=condition_key(condition),
                     condition=condition,
+                    # 格子自己带着版本：它才是被执行的单位，「我跑的是哪一版」不必回头读套件。
+                    case_set_version=case_set_version,
                     status="pending",
                 )
             )
 
     if declared is None:
-        for item_id, case_id, condition in queued:
-            _executor.submit(_run_item, suite_id, item_id, case_id, condition)
+        for item_id, case_id, condition, definition in queued:
+            _executor.submit(_run_item, suite_id, item_id, case_id, condition, definition)
     else:
         # 声明了整批上限就交给一个串行调度：见 _run_batch 里为什么必须逐格来。
         _executor.submit(_run_batch, suite_id, list(queued), declared)
@@ -395,12 +423,15 @@ def _run_item(
     item_id: str,
     case_id: str,
     condition: dict[str, Any],
+    definition: dict[str, Any],
     *,
     budget: ReplayBudget | None = None,
     shared_ledger: BudgetLedger | None = None,
     publish_batch: Callable[[], None] | None = None,
 ) -> None:
     """跑一个格子。这里吞掉所有异常：单条用例失败不能拖垮整批。
+
+    definition 是提交那一刻冻结的用例定义：这一格按它跑，不读当前用例行（见 submit_suite）。
 
     budget / shared_ledger 由整批调度给（没有整批上限时两个都不传）：
     这一格的额度是「整批剩余」，同一次真实调用也会记进整批的账本。
@@ -438,6 +469,7 @@ def _run_item(
     try:
         run_case_blocking(
             case_id,
+            definition=definition,
             preset=preset,
             model=condition.get("model"),
             system_prompt=condition.get("system_prompt"),
@@ -467,7 +499,7 @@ def _run_item(
 
 def _run_batch(
     suite_id: str,
-    queued: list[tuple[str, str, dict[str, Any]]],
+    queued: list[tuple[str, str, dict[str, Any], dict[str, Any]]],
     budget: ReplayBudget,
 ) -> None:
     """整批预算下的调度：**按顺序逐格**执行，启动前先看整批的账。
@@ -488,7 +520,7 @@ def _run_batch(
         _publish_suite_budget(suite_id, ledger)
 
     try:
-        for item_id, case_id, condition in queued:
+        for item_id, case_id, condition, definition in queued:
             try:
                 stopped_by = ledger.exceeded_by()
                 if stopped_by is None:
@@ -497,6 +529,7 @@ def _run_batch(
                         item_id,
                         case_id,
                         condition,
+                        definition,
                         budget=ledger.remaining(),
                         shared_ledger=ledger,
                         publish_batch=publish,
@@ -591,7 +624,7 @@ def suite_payload(session: Any, suite_id: str) -> dict[str, Any] | None:
     suite = get_suite(session, suite_id)
     if suite is None:
         return None
-    return _payload(suite, list_suite_items(session, suite_id))
+    return _payload(session, suite, list_suite_items(session, suite_id))
 
 
 def suite_summaries(session: Any, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -601,7 +634,7 @@ def suite_summaries(session: Any, *, limit: int = 20) -> list[dict[str, Any]]:
     ]
 
 
-def _payload(suite: SuiteTable, items: list[SuiteItemTable]) -> dict[str, Any]:
+def _payload(session: Any, suite: SuiteTable, items: list[SuiteItemTable]) -> dict[str, Any]:
     counts = _tally(items)
     return {
         "id": suite.id,
@@ -610,6 +643,10 @@ def _payload(suite: SuiteTable, items: list[SuiteItemTable]) -> dict[str, Any]:
         "finished_at": aware_utc(suite.finished_at),
         "case_ids": list(suite.case_ids or []),
         "conditions": [dict(condition) for condition in (suite.conditions or [])],
+        # 这批跑的是哪一版用例集：提交那一刻固化的定义标识（可反查，见 case_versions.py）。
+        # 历史批次没有它，这里如实是 None——「无版本记录」是真实状态，不是一个缺失的默认值。
+        # drift 只说「用例自本批之后被改过」，不改变本批任何一条结论的归属。
+        "case_set": case_set_payload(session, suite),
         "total": len(items),
         "completed": _completed(counts),
         # 批次级的四态计数：这是计数，不是一个分数——它不跨条件做任何加权或合并。
@@ -679,6 +716,8 @@ def _summary(suite: SuiteTable, items: list[SuiteItemTable]) -> dict[str, Any]:
         "created_at": aware_utc(suite.created_at),
         "finished_at": aware_utc(suite.finished_at),
         "conditions": [dict(condition) for condition in (suite.conditions or [])],
+        # 批次列表也要能一眼看出「这批是哪一版用例」：趋势与对比都建立在这个归属上。
+        "case_set_version": getattr(suite, "case_set_version", None),
         "total": len(items),
         "completed": _completed(counts),
         "counts": counts,
@@ -744,6 +783,8 @@ def _item_payload(item: SuiteItemTable) -> dict[str, Any]:
         "id": item.id,
         "case_id": item.case_id,
         "case_name": item.case_name,
+        # 每个格子都带着自己归属的版本：格子是被执行的单位，它的归属不该靠反查套件才知道。
+        "case_set_version": getattr(item, "case_set_version", None),
         "condition_key": item.condition_key,
         "condition": dict(item.condition or {}),
         "status": item.status,

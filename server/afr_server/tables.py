@@ -92,6 +92,10 @@ class CaseTable(SQLModel, table=True):
     #: 最近一次执行用的条件（prompt 版本 / 模型）。缺了它，用例页上那句「最近一次结论」
     #: 就没有前提：同一批里两个 Prompt 版本都能写进这一列，谁也说不清看到的是哪一次。
     last_condition: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
+    #: 最近一次执行**所用的那一版定义**的内容摘要（见 case_versions.py）。
+    #: 缺了它，「最近一次结论」就少一层前提：用例被改过之后，页面上那句结论看起来仍像是
+    #: 在描述当前这份定义。存量行没有它，读出来就是 None——如实表示「没记录」，不回填。
+    last_definition_digest: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
 
 
@@ -116,6 +120,10 @@ class SuiteTable(SQLModel, table=True):
     budget: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
     #: 整批的预算记账（已用 / 上限 / 是否触顶）。没声明上限时为 None。
     budget_usage: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
+    #: 提交那一刻固化的**用例集版本**（内容决定的可寻址标识，见 case_versions.py）。
+    #: 版本化能力上线之前创建的批次没有它，读出来就是 None：如实显示「无版本记录」，
+    #: 不按当前用例反推一个版本号塞回去。
+    case_set_version: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
     finished_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
 
@@ -144,6 +152,9 @@ class SuiteItemTable(SQLModel, table=True):
     condition_key: str = Field(index=True)
     #: 这次执行实际用的条件：prompt 版本名、模型，以及解析出来的 Prompt 正文。
     condition: Any = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    #: 这个格子归属的用例集版本（与套件同一个值）。格子因此自己就说得清「我跑的是哪一版
+    #: 定义」，不必回头去读套件行——格子才是真正被执行的那个单位。
+    case_set_version: Optional[str] = None
     #: pending / running / passed / failed / inconclusive / error。
     status: str = Field(default="pending", index=True)
     run_id: Optional[str] = None
@@ -151,4 +162,24 @@ class SuiteItemTable(SQLModel, table=True):
     cause: Any = Field(default=None, sa_column=Column(JSON, nullable=True))
     started_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
     ended_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+
+
+class CaseSetVersionTable(SQLModel, table=True):
+    """一个用例集版本：提交套件那一刻所用到的那一组用例定义。
+
+    主键是**内容决定的**摘要（cs1:<sha256>），因此同一份内容只会有一行：
+    「这两个套件是不是同一版用例」这个问题由标识本身回答，不需要另行比对。
+    行里只存判据相关的那一面（哪些字段算、哪些不算，见 case_versions.py 的说明）——
+    版本的内容因此严格是它标识的函数，同标识必然同内容。
+    """
+
+    __tablename__ = "case_set_versions"
+
+    id: str = Field(primary_key=True)
+    #: 规范化方案的版本号，与标识前缀同一个值。换算法时前缀跟着换，旧标识仍然可解释。
+    canonicalization: str = "cs1"
+    case_count: int = 0
+    #: [{"case_id", "digest", "definition"}]，按 case_id 排序（用例顺序不参与标识）。
+    cases: Any = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime, nullable=False))
 

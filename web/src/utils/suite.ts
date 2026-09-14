@@ -138,3 +138,78 @@ export interface ConditionSpec {
   prompt?: string | null
   model?: string | null
 }
+
+/**
+ * 一个用例集版本（服务端 case_versions.py 的 CaseSetRef）。结构类型，保持本文件零 import。
+ */
+export interface CaseSet {
+  id: string
+  canonicalization: string
+  case_count: number
+  /** 这版定义是否已固化在库里、可以按 id 反查。 */
+  recorded: boolean
+  recorded_at?: string | null
+  /** 定义行缺失时无从判断，为 null。 */
+  drift?: { changed: string[]; missing: string[]; unchanged: number } | null
+}
+
+/**
+ * 版本标识的短形式。前缀必须留着：`cs1:` 说的就是「这是内容决定的标识」，
+ * 掐掉它只剩一串十六进制，读者就无从判断它是什么。
+ */
+export function shortVersion(version: string): string {
+  const separator = version.indexOf(':')
+  if (separator < 0) return version
+  const scheme = version.slice(0, separator)
+  const digest = version.slice(separator + 1)
+  if (digest.length <= 8) return version
+  return scheme + ':' + digest.slice(0, 8) + '…'
+}
+
+/**
+ * 「这批跑的是哪一版用例集」。
+ *
+ * 没有版本记录时如实说「无版本记录」：不写「版本：未知」那种像是缺了一个默认值的说法，
+ * 也不按当前用例反推一个版本号——那等于给历史批次补一个它从来没有过的前提。
+ */
+export function caseSetLabel(caseSet: CaseSet | null | undefined): string {
+  if (!caseSet) return '用例集版本：无版本记录（这一批建于版本化之前）'
+  const short = shortVersion(caseSet.id)
+  if (!caseSet.recorded) return '用例集版本 ' + short + '：定义已反查不到'
+  return '用例集版本 ' + short + '（' + caseSet.case_count + ' 条用例）'
+}
+
+/**
+ * 用例自本批之后被改动过的提示；没变过就没有这句话（不给「一切正常」的噪音）。
+ *
+ * 这句话必须同时说清**归属没有变**：只说「用例变了」，读者很容易以为这一批的结论也跟着
+ * 变了。事实上这一批每一格跑的都是提交那一刻冻结的定义。
+ */
+export function caseSetDriftNotice(caseSet: CaseSet | null | undefined): string {
+  const drift = caseSet?.drift
+  if (!drift) return ''
+  const parts: string[] = []
+  if (drift.changed.length > 0) {
+    parts.push('有 ' + drift.changed.length + ' 条用例在本批提交之后被改动')
+  }
+  if (drift.missing.length > 0) {
+    parts.push('有 ' + drift.missing.length + ' 条用例已经找不到')
+  }
+  if (parts.length === 0) return ''
+  return parts.join('，') + '；本批结论仍归属提交那一刻的定义。'
+}
+
+/**
+ * 用例页上「最近一次结论」的定义前提。
+ *
+ * 只在**记录过**、且与当前定义不一致时才说话：没有记录就说「一致」，等于把「不知道」写成
+ * 「没问题」——那是这一层最不该犯的错。
+ */
+export function definitionDriftNotice(item: {
+  definition_digest?: string | null
+  last_definition_digest?: string | null
+} | null | undefined): string {
+  const last = item?.last_definition_digest
+  if (!item || !last || last === item.definition_digest) return ''
+  return '最近一次结论是在另一版定义下得出的：当前定义已改动，那次结论不描述现在这份定义。'
+}
