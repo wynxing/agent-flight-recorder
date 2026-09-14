@@ -59,6 +59,17 @@ test('cost checked only when it is known, and the calls dimension is decided fir
   assert.match(usageDetail(priced.usage()), /没有因预算停止/);
 });
 
+test('a known part-sum must not stand in for an unknown total when deciding the cost ceiling', () => {
+  // 已知部分已经有数（0.01），总量却是**未知**（后面有一次调用无法定价）。
+  // 拿已知部分冒充总额参与判定，就是把「说不清花了多少」说成「已经花到上限」：上限 0 这种
+  // 极端配置下尤其明显。未知 ⇒ 这一维不参与判定，与 Python 侧 cost.py 同一条立场。
+  const ledger = new BudgetLedger({max_cost_usd: 0});
+  ledger.noteModelCall(0.01);
+  ledger.noteModelCall(null);
+  assert.equal(ledger.costUsedUsd, null);
+  assert.equal(ledger.exceededBy(), null);
+});
+
 test('a batch hands each cell what is left and stops starting new cells at the ceiling', () => {
   const ledger = new BudgetLedger({max_model_calls: 3});
   assert.deepEqual(beginCell(ledger), {max_cost_usd: null, max_model_calls: 3});

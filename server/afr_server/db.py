@@ -90,3 +90,13 @@ def reset_engine() -> None:
         _engine.dispose()
     _engine = None
 
+
+def bound_db_path() -> str | None:
+    """此刻 engine 绑定的库文件；engine 还没建、或者已被重置时返回 None。
+
+    给日志与诊断用，**不建 engine**（诊断不该有副作用）。后台线程连错库的典型症状是
+    `no such table`，而那句话不带库名时几乎无法定位：issue #18 的 CI 日志里就只有一个
+    表名。写入失败的地方顺带把库名说清楚，下一次就能一眼看出线程跑到了哪个库上。
+    """
+
+    return None if _engine is None else str(_engine.url.database)

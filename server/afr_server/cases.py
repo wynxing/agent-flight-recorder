@@ -31,7 +31,7 @@ from agent_flight_recorder.replay.reasons import (
 from sqlmodel import col, update
 
 from .assertions import AssertionSpec, evaluate_assertions
-from .db import session_scope
+from .db import bound_db_path, session_scope
 from .replay_runner import build_plan, execute_replay, prepare_run
 from .storage import final_output_of, get_case, get_events, get_run
 from .tables import CaseTable
@@ -445,4 +445,7 @@ def _store(
                 last_condition=dict(condition) if condition else None,
             )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("failed to persist case result: %s", exc)
+        # 带上库名：这一句是「后台线程连到了别的库」时唯一的现场线索（engine 按当前设置
+        # 懒建，线程跑过换库点就会漂走）。只有一个 `no such table` 几乎无法定位——issue #18
+        # 的 CI 日志里就只有一个表名。
+        logger.warning("failed to persist case result: %s（db=%s）", exc, bound_db_path())

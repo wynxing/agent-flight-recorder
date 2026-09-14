@@ -533,12 +533,18 @@ def test_condition_reached_the_latest_run_but_not_a_new_unlabelled_one(
         stalling.wait(timeout=30)
 
     monkeypatch.setattr(cases_module, "_execute", stall)
-    worker = threading.Thread(
-        target=lambda: cases_module.run_case_blocking(case_id), daemon=True
+    # 这个 worker 要走登记表：它会写库（run_case_blocking），换库之前必须能被等。
+    # 只靠下面那次 join 自保是不够的——join 一旦超时，它就会漂进下一个测试的库。
+    # 名字按 `afr-<用途>` 起，万一真漏了，诊断网也认得出它。
+    from afr_server import background
+
+    worker = background.start(
+        "afr-test-suites-stall-worker", lambda: cases_module.run_case_blocking(case_id)
     )
-    worker.start()
     try:
         assert entered.wait(timeout=30), "第二次执行没有开始"
+        # 这个 worker 在登记表里（它卡着，所以此刻必然还活着）：它写库，换库前必须能被等。
+        assert "afr-test-suites-stall-worker" in background.names(), background.names()
         running = client.get(f"/v1/cases/{case_id}").json()
         assert running["last_status"] == "running"
         # 关键断言：执行中不能还挂着上一轮的条件。

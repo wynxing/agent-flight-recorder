@@ -227,9 +227,47 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 | SDK 上报 | 单个守护线程 | 周期性 drain + 发送；失败的事件会重新排队 |
 | 服务端回放 | `ThreadPoolExecutor(max_workers=2)` | 回放是 CPU 与 token 密集型，限制并发避免互相挤压 |
 | 服务端用例 | `ThreadPoolExecutor(max_workers=2)` | 用例执行本质是回放，单独池避免占满回放槽位 |
+| 服务端批量套件 | `ThreadPoolExecutor(max_workers=2)` | 未声明整批上限时每格一个任务；声明了整批上限就整批交给一个串行调度（额度要逐格扣） |
+| 启动播种 | 登记过的守护线程（`background.start`） | 启动后异步进行，不阻塞服务可用；登记是为了**能被等** |
 | SQLite | WAL 模式 | 让"边录制边读时间线"不会互相阻塞 |
 
 **回放不占请求线程。** 提交回放后立即返回 `run_id`，前端通过 SSE 或轮询观察进度。
+
+### 后台工作必须可被看见
+
+「提交即返回」是有代价的：后台工作会活过触发它的那个请求。这份代价换来一条纪律——**任何后台
+工作都要能被说清、能被等**，否则它会以一种很难查的方式出错。
+
+最典型的是测试隔离：每个测试用一份新的 SQLite 库，而 engine 是按**当前**设置懒建的
+（`db.get_engine`）。一个没被看见的后台线程会在换库之后重建 engine，于是连到**下一个测试**
+的库上去写。症状不是断言失败，而是后台日志里的 `no such table: ...`，或者某个测试干等 90s
+之后超时——门禁在没有改动任何行为的情况下变红（issue #18 就是这么发作的：播种线程当时是裸
+`threading.Thread`，谁都没数到它）。
+
+因此有两条规定：
+
+1. **应用起的后台线程走 `afr_server/background.py` 的 `start()`**，登记在册。语义完全不变
+   （daemon、立刻返回、不阻塞启动），变的是 `afr_server.background.join_all()` 能等它；
+2. **测试侧的不变量**（`server/tests/conftest.py`）：换库（`db.reset_engine`）之前必须先 drain，
+   等不到就**判失败**，并报出「哪个任务、连到了哪个库」。等待集 = 三个线程池的命名计数 +
+   登记表里还活着的线程。
+
+同一类问题在别处的现场线索也补齐了：写入失败的后台日志会带上 engine 当时绑定的库名
+（`db.bound_db_path()`），因为只有一个 `no such table` 几乎无法定位。
+
+**已知未纳入等待集的后台工作**（如实登记，别让「没人看见」当成「没有」）：
+
+| 路径 | 等待集 | 诊断网 | 原因 |
+| --- | --- | --- | --- |
+| SDK 上报线程（`afr-flush-*`） | 不在 | **看得见**（名字是 `afr-*`） | 它是 SDK 自己的生命周期，由 `Recorder.close()` 排空；服务端测试用的播种录制器是 `flush_interval=0`，不起该线程 |
+| SSE 事件流（`_event_stream`） | 不在 | **看不见** | 它跑在 Starlette/AnyIO 的线程池里，线程名是 `AnyIO worker thread` / `asyncio-portal-*`（实测：**任何**一次 TestClient 请求都会造出这些名字，所以放宽匹配只会把诊断淹没在框架线程里），名字不归我们管。它只读库；`pytest` 里也没有 SSE 用例（只有控制台在用它） |
+| `test_suites.py` 的 `_ImmediateThreads` | 不在（drain 时会重新包裹一次） | 看不见（默认线程名） | 测试自己换上的执行器、自己等它跑完 |
+| `test_suites.py` 的 stall worker | **在**（`afr-test-suites-stall-worker`） | 看得见 | 它会写库（`run_case_blocking`），所以走 `background.start` 登记，而不是只靠测试自己那次 join 自保 |
+| `integrations/pi`（Node 运行器） | 不适用 | 不适用 | 独立进程/事件循环，与 Python 侧的 engine 切换无关 |
+
+一条纪律：**加了新的后台路径，就同时把它登记进等待集**；确实登记不了（第三方线程）的，写进
+上面这张表并写清「诊断网认不认得出它」，别让它隐身。诊断网只认 `afr-` 前缀（`conftest.py`
+的 `stray_threads()`），因此**自己起的线程要按 `afr-<用途>` 命名**——名字是它唯一的可见性。
 
 ---
 
