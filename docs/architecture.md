@@ -257,15 +257,17 @@ Python 与 TypeScript 的取值集合逐字一致并由测试守着。副作用�
 
 **已知未纳入等待集的后台工作**（如实登记，别让「没人看见」当成「没有」）：
 
-| 路径 | 状态 | 原因 |
-| --- | --- | --- |
-| SDK 上报线程（`afr-flush-*`） | 不在等待集，只在诊断里点名 | 它是 SDK 自己的生命周期，由 `Recorder.close()` 排空；服务端测试用的播种录制器是 `flush_interval=0`，不起该线程 |
-| SSE 事件流（`_event_stream`） | 不在等待集，只在诊断里点名 | 它跑在 Starlette 的线程池里（第三方），名字不归我们管；只读库，且目前没有测试依赖它 |
-| `test_suites.py` 的 `_ImmediateThreads` | 不在等待集（drain 时会重新包裹一次） | 测试自己换上的执行器、自己等它跑完；它的线程名是默认名，诊断网也认不出来 |
-| `integrations/pi`（Node 运行器） | 不适用 | 独立进程/事件循环，与 Python 侧的 engine 切换无关 |
+| 路径 | 等待集 | 诊断网 | 原因 |
+| --- | --- | --- | --- |
+| SDK 上报线程（`afr-flush-*`） | 不在 | **看得见**（名字是 `afr-*`） | 它是 SDK 自己的生命周期，由 `Recorder.close()` 排空；服务端测试用的播种录制器是 `flush_interval=0`，不起该线程 |
+| SSE 事件流（`_event_stream`） | 不在 | **看不见** | 它跑在 Starlette/AnyIO 的线程池里，线程名是 `AnyIO worker thread` / `asyncio-portal-*`（实测：**任何**一次 TestClient 请求都会造出这些名字，所以放宽匹配只会把诊断淹没在框架线程里），名字不归我们管。它只读库；`pytest` 里也没有 SSE 用例（只有控制台在用它） |
+| `test_suites.py` 的 `_ImmediateThreads` | 不在（drain 时会重新包裹一次） | 看不见（默认线程名） | 测试自己换上的执行器、自己等它跑完 |
+| `test_suites.py` 的 stall worker | **在**（`afr-test-suites-stall-worker`） | 看得见 | 它会写库（`run_case_blocking`），所以走 `background.start` 登记，而不是只靠测试自己那次 join 自保 |
+| `integrations/pi`（Node 运行器） | 不适用 | 不适用 | 独立进程/事件循环，与 Python 侧的 engine 切换无关 |
 
 一条纪律：**加了新的后台路径，就同时把它登记进等待集**；确实登记不了（第三方线程）的，写进
-上面这张表，别让它隐身。
+上面这张表并写清「诊断网认不认得出它」，别让它隐身。诊断网只认 `afr-` 前缀（`conftest.py`
+的 `stray_threads()`），因此**自己起的线程要按 `afr-<用途>` 命名**——名字是它唯一的可见性。
 
 ---
 

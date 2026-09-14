@@ -17,6 +17,18 @@ issue #18 的成因不是产品缺陷，而是门禁自己的漏：播种线程�
 
 另有两条钉住「产品行为不变」：播种仍然异步、仍然不阻塞服务可用（卡住播种时健康检查照样
 回话），而 `AFR_SEED_ON_STARTUP=false` 时连线程都不起。
+
+## 等待集的两半都要有守护
+
+第 9 轮审核指出：上面这些只覆盖了登记表那一半。于是这里按「等待集的每一半 + 两条收紧 +
+一条自己声称的语义」分别补齐——每一条都对应一个**实测存活过的变异**：
+
+* `test_a_case_pool_task_is_in_the_waiting_set` / `test_a_suite_pool_task_is_in_the_waiting_set`：
+  在 `install()` 开头 `return`（彻底停用三个池的命名计数）→ 池任务不可见 → 必红；
+* `test_an_unlanded_task_fails_the_swap`：把 `assert_idle` 的 `raise` 降级回 `warnings.warn`
+  → 必红（「等不到就判失败」这条收紧不能只写在文档里）；
+* `test_join_all_waits_for_threads_started_while_waiting`：把 `join_all` 的循环重查退化成
+  「只等第一轮快照」→ 必红（等待期间新起的线程不能漏）。
 """
 
 from __future__ import annotations
@@ -135,6 +147,75 @@ def seed_thread_witness() -> Iterator[None]:
     assert not alive, f"换库之后还有后台线程活着：{alive}（换库会与它并发）"
 
 
+class Stall:
+    """把一个后台任务卡住：`entered` 由任务置位，`release` 由测试放行。"""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+
+@pytest.fixture()
+def pool_stall() -> Iterator[Stall]:
+    """池任务卡点：测试结束（无论成败）一定放行。
+
+    失败路径上更要紧：卡住的池任务会让拆除里的 drain 白等一轮超时，失败信息反而更难读。
+    """
+
+    gate = Stall()
+    try:
+        yield gate
+    finally:
+        gate.release.set()
+
+
+def _stall(monkeypatch: pytest.MonkeyPatch, module: Any, name: str, gate: Stall) -> None:
+    """把池里那个真任务卡住：放行之后照常执行，卡的只是「任务在飞」这个窗口。"""
+
+    real = getattr(module, name)
+
+    def stalling(*args: Any, **kwargs: Any) -> Any:
+        gate.entered.set()
+        gate.release.wait(timeout=GATE_TIMEOUT_SECONDS)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, stalling)
+
+
+def _assert_drain_waits(background_work: Any, release: threading.Event, what: str) -> None:
+    """① 卡点没放行时 drain 不能返回；② 放行之后 drain 返回空（都落地了）。"""
+
+    leftover: list[str] = []
+    finished = threading.Event()
+
+    def drain() -> None:
+        leftover.extend(background_work.wait_idle(timeout=GATE_TIMEOUT_SECONDS))
+        finished.set()
+
+    drainer = threading.Thread(target=drain, name="test-drainer", daemon=True)
+    drainer.start()
+    try:
+        assert not finished.wait(timeout=STILL_BLOCKED_WINDOW_SECONDS), (
+            f"{what}还活着，drain 却已经返回了：换库会与它并发。"
+            f"此刻等待集={background_work.outstanding()}"
+        )
+    finally:
+        release.set()
+
+    assert finished.wait(timeout=GATE_TIMEOUT_SECONDS), f"放行之后 drain 仍然没有返回（{what}）"
+    assert leftover == [], f"drain 说还有没落地的后台工作（{what}）：{leftover}"
+
+
+def _create_case(client: Any, make_run: Any) -> str:
+    """建一条最小可执行的用例（与 test_suites.py 的样板同一套）。"""
+
+    client.post("/v1/ingest", json=make_run())
+    return client.post(
+        "/v1/cases",
+        json={"name": "用例", "source_run_id": "run-1", "assertions": [{"type": "no_error"}]},
+    ).json()["id"]
+
+
 def test_seed_thread_is_in_the_waiting_set(
     seed_gate: SeedGate, gated_seed_client: Any, background_work: Any
 ) -> None:
@@ -170,33 +251,158 @@ def test_drain_waits_for_the_seed_thread(
 ) -> None:
     """行为：播种还活着时 drain 不能返回；它落地之后才放行，产物就在这个测试的库里。"""
 
-    drained: list[str] = []
-    finished = threading.Event()
-
-    def drain() -> None:
-        drained.extend(background_work.wait_idle(timeout=GATE_TIMEOUT_SECONDS))
-        finished.set()
-
-    drainer = threading.Thread(target=drain, name="test-drainer", daemon=True)
-    drainer.start()
-    try:
-        # 关键反证：后台工作还活着（卡点没放行、也没落地），drain 就必须一直没返回。
-        # 修复被移除时它立刻返回，这里必红——这正是「换库会与后台任务并发」那一刻。
-        assert not finished.wait(timeout=STILL_BLOCKED_WINDOW_SECONDS), (
-            "drain 在后台工作还活着时就返回了：换库会与它并发。"
-            f"此刻等待集={background_work.outstanding()}，登记表={background.names()}，"
-            f"播种是否已启动={seed_gate.started.is_set()}"
-        )
-    finally:
-        seed_gate.release.set()
-
-    assert finished.wait(timeout=GATE_TIMEOUT_SECONDS), "放行之后 drain 仍然没有返回"
-    assert drained == [], f"drain 说还有没落地的后台工作：{drained}"
+    # 播种还活着（卡点没放行、也没落地）时 drain 就必须一直没返回：修复被移除时它立刻
+    # 返回，这里必红——那正是「换库会与后台任务并发」的那一刻。
+    _assert_drain_waits(background_work, seed_gate.release, "播种线程")
 
     # 落地证据：drain 返回时，播种的产物已经在这个测试的库里——而不是在别人的库上。
     cases = gated_seed_client.get("/v1/cases").json()["cases"]
     assert cases, "drain 返回时播种还没有落地"
     assert gated_seed_client.get("/v1/runs").json()["total"] >= 1
+
+
+# ---------------------------------------------------------------- 等待集的另一半：线程池
+
+
+def test_a_case_pool_task_is_in_the_waiting_set(
+    client: Any,
+    make_run: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    background_work: Any,
+    pool_stall: Stall,
+) -> None:
+    """在飞的**池任务**也必须在等待集里，而且是被点了名的。
+
+    等待集有两半：登记表与三个线程池的命名计数。这里钉池那一半——在 `install()` 开头
+    加一句 `return`（彻底停用池计数）时，这条必红：池任务会重新变成「没人看见的后台
+    工作」，也就是 issue #18 的原始形态。
+    """
+
+    from afr_server import cases as cases_module
+
+    case_id = _create_case(client, make_run)
+    _stall(monkeypatch, cases_module, "_execute", pool_stall)
+    cases_module.submit_case_run(case_id)
+
+    assert pool_stall.entered.wait(timeout=GATE_TIMEOUT_SECONDS), "用例池任务没有开始"
+    assert any(item.startswith("线程池:cases") for item in background_work.outstanding()), (
+        f"在飞的池任务不在等待集里：{background_work.outstanding()}"
+    )
+    assert background_work.pending.get("线程池:cases") == 1, background_work.pending
+
+    _assert_drain_waits(background_work, pool_stall.release, "用例池任务")
+
+    # 落地证据：drain 返回时结论已经写在**这个测试的**库里。
+    status = client.get(f"/v1/cases/{case_id}").json()["last_status"]
+    assert status not in (None, "running"), f"drain 返回时用例还没有落地（status={status}）"
+
+
+def test_a_suite_pool_task_is_in_the_waiting_set(
+    client: Any,
+    make_run: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    background_work: Any,
+    pool_stall: Stall,
+) -> None:
+    """套件池那一半同理：整批的执行也走池，第 7 轮正是在这里积压成事实。"""
+
+    from afr_server import suites as suites_module
+
+    case_id = _create_case(client, make_run)
+    _stall(monkeypatch, suites_module, "_run_item", pool_stall)
+
+    body = client.post(
+        "/v1/suites", json={"case_ids": [case_id], "conditions": [{"model": "m"}]}
+    ).json()
+
+    assert pool_stall.entered.wait(timeout=GATE_TIMEOUT_SECONDS), "套件池任务没有开始"
+    assert any(item.startswith("线程池:suites") for item in background_work.outstanding()), (
+        f"在飞的池任务不在等待集里：{background_work.outstanding()}"
+    )
+
+    _assert_drain_waits(background_work, pool_stall.release, "套件池任务")
+
+    detail = client.get(f"/v1/suites/{body['suite_id']}").json()
+    assert detail["completed"] == detail["total"] == 1, f"drain 返回时格子还没有落地：{detail}"
+
+
+def test_an_unlanded_task_fails_the_swap(
+    background_work: Any, background_leak: type[BaseException], app_env: Path
+) -> None:
+    """「等不到就判失败」这条收紧本身也要被钉住。
+
+    把 `assert_idle` 里的 `raise BackgroundLeak` 降级回 `warnings.warn`，这条立刻红：门禁
+    又会变回「报一条警告、照样换库」，而上一轮就是这么漏过去的。只是警告的话，跑绿不等于
+    不变量成立。
+    """
+
+    release = threading.Event()
+    background.start("afr-test-never-lands", lambda: release.wait(timeout=GATE_TIMEOUT_SECONDS))
+    try:
+        with pytest.raises(background_leak) as excinfo:
+            background_work.assert_idle(timeout=0.3)
+        message = str(excinfo.value)
+        assert "afr-test-never-lands" in message, f"诊断里没有任务名：{message}"
+        assert app_env.name in message, f"诊断里没有库名：{message}"
+    finally:
+        release.set()
+
+    assert background_work.wait_idle(timeout=GATE_TIMEOUT_SECONDS) == [], "放行之后仍有没落地的工作"
+
+
+def test_join_all_waits_for_threads_started_while_waiting(app_env: Path) -> None:
+    """等一个线程的过程中新起的线程也不能漏（`join_all` 的循环重查）。
+
+    把 `join_all` 退化成「只看一眼快照、join 完就返回」时，这条必红：第一个线程在结束前
+    起了第二个，而等待返回时第二个还在跑。这条不是我凭空加的语义——`background.join_all`
+    的 docstring 自己写着「等待期间可能又起了新的线程（播种线程自己也可能触发别的后台
+    路径），只等第一轮会漏掉它们」，那就得有守护。
+    """
+
+    hold_first = threading.Event()
+    second_started = threading.Event()
+    second_finished = threading.Event()
+    release_second = threading.Event()
+
+    def second_body() -> None:
+        second_started.set()
+        release_second.wait(timeout=GATE_TIMEOUT_SECONDS)
+        second_finished.set()
+
+    def first_body() -> None:
+        hold_first.wait(timeout=GATE_TIMEOUT_SECONDS)
+        background.start("afr-test-second", second_body)
+
+    background.start("afr-test-first", first_body)
+    joined: list[list[str]] = []
+    join_entered = threading.Event()
+    finished = threading.Event()
+
+    def join() -> None:
+        join_entered.set()
+        joined.append(background.join_all(timeout=GATE_TIMEOUT_SECONDS))
+        finished.set()
+
+    joiner = threading.Thread(target=join, name="test-joiner", daemon=True)
+    joiner.start()
+    try:
+        assert join_entered.wait(timeout=GATE_TIMEOUT_SECONDS), "join 线程没有起来"
+        # 让 join_all 先取到快照并等在第一个线程上。万一这一步没赶上，输的方向是「这条测试
+        # 抓不到退化实现」（假绿），不是假红。
+        time.sleep(0.1)
+        hold_first.set()
+        assert second_started.wait(timeout=GATE_TIMEOUT_SECONDS), "第一个线程没有起第二个"
+        assert not finished.wait(timeout=STILL_BLOCKED_WINDOW_SECONDS), (
+            "join_all 只看了一眼快照就返回了：等待期间新起的线程会被漏掉"
+        )
+    finally:
+        hold_first.set()
+        release_second.set()
+
+    assert finished.wait(timeout=GATE_TIMEOUT_SECONDS), "放行之后 join_all 仍未返回"
+    # 更硬的一条：join_all 返回的那一刻，新起的线程必须已经落地（而不是「返回时还在跑」）。
+    assert second_finished.is_set(), "join_all 返回时新起的线程还没有落地"
+    assert joined == [[]], f"join_all 说还有没落地的线程：{joined}"
 
 
 def test_seeded_client_teardown_waits_for_the_seed_thread(

@@ -242,6 +242,18 @@ def background_work() -> BackgroundWork:
 
     return _background
 
+
+@pytest.fixture()
+def background_leak() -> type[BackgroundLeak]:
+    """`pytest.raises` 要认的那个失败类型，由 fixture 给出。
+
+    不走 `from conftest import ...`：仓库里有多个 tests 目录、同名模块会互相覆盖
+    （`examples/langgraph_sre_agent/tests/conftest.py` 就是这个名字），跑全量时拿到的可能
+    是别人的 `conftest`。与 `make_run` 同样的理由，用 fixture 传递。
+    """
+
+    return BackgroundLeak
+
 @pytest.fixture()
 def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     # 换库之前先等上一个测试留下的后台任务落地：否则它们会连到这一个测试的库上写。
