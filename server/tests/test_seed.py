@@ -80,3 +80,30 @@ def test_seeded_case_turns_green_with_the_grounded_prompt(seeded_client: Any) ->
     assert reread["last_run_id"] == run_id, "换 Prompt 的回放没有落到用例上"
     assert reread["last_status"] == "passed"
     assert all(item["passed"] for item in reread["last_results"])
+
+
+def test_seed_picks_the_same_agent_no_matter_the_registration_order() -> None:
+    """播种可复现：按名字挑，而不是按 entry point 的返回顺序。
+
+    注册了第二个 Agent（第二个框架）之后暴露出来的问题：元数据给出的顺序会把后注册的
+    排在前面，于是「种哪一个 Agent」在不同机器上可能不同，而平台自带的回归用例正是
+    建立在那条父 Run 之上的。
+    """
+
+    from afr_server.seed import pick_seed_spec
+    from agent_flight_recorder.registry import AgentSpec
+
+    def spec(name: str, *, seedable: bool = True) -> AgentSpec:
+        return AgentSpec(
+            name=name,
+            build=lambda **_: None,
+            seed=(lambda recorder: "run") if seedable else None,
+        )
+
+    # 故意把后注册的放在前面：按顺序取会选到 z-agent。
+    picked = pick_seed_spec([spec("z-agent"), spec("a-agent")])
+    assert picked is not None and picked.name == "a-agent"
+
+    # 不可播种的 Agent 不参与挑选；一个都没有时给出 None，而不是硬凑一个。
+    assert pick_seed_spec([spec("z-agent", seedable=False), spec("a-agent")]).name == "a-agent"
+    assert pick_seed_spec([spec("z-agent", seedable=False)]) is None

@@ -21,6 +21,7 @@ from langchain.agents.middleware import (
 )
 
 from .cost import estimate_cost
+from .identifiers import model_identifier
 from .models import (
     ATTR_NODE,
     EffectSource,
@@ -315,28 +316,6 @@ def _call_get(call: Any, key: str) -> Any:
     if isinstance(call, dict):
         return call.get(key)
     return getattr(call, key, None)
-
-
-def model_identifier(model: Any) -> str | None:
-    """尽力取到模型的稳定标识。
-
-    不同的 ChatModel 实现把模型名放在不同的地方，自定义模型往往只声明
-    _identifying_params。取不到时才退回类名。
-    """
-
-    if model is None:
-        return None
-    for attr in ("model_name", "model"):
-        value = getattr(model, attr, None)
-        if isinstance(value, str) and value:
-            return value
-    params = getattr(model, "_identifying_params", None)
-    if isinstance(params, dict):
-        for key in ("model", "model_name", "model_id"):
-            value = params.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return type(model).__name__
 
 
 def _tool_name(tool: Any) -> str:

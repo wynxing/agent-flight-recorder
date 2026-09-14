@@ -9,7 +9,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["sdk", "server", "examples/langgraph_sre_agent"]
+members = ["sdk", "server", "examples/langgraph_sre_agent", "examples/openai_agents_sre_agent"]
 
 [dependency-groups]
 dev = [
@@ -19,5 +19,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["sdk/tests", "server/tests", "examples/langgraph_sre_agent/tests"]
+testpaths = [
+    "sdk/tests",
+    "server/tests",
+    "examples/langgraph_sre_agent/tests",
+    "examples/openai_agents_sre_agent/tests",
+ ]
 addopts = "-q"

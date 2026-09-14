@@ -37,19 +37,19 @@ from .models import (
     summarize_events,
 )
 from .recorder import DoctorReport, Recorder, RecorderStats, doctor, new_id
-from .replay.reasons import (
-    CAUSE_CODES,
-    CAUSE_PRECEDENCE,
-    InconclusiveCode,
-    InconclusiveReason,
-    most_significant,
-)
 from .registry import (
     ENTRY_POINT_GROUP,
     AgentSpec,
     SeedCase,
     load_agent_specs,
     resolve_agent_spec,
+)
+from .replay.reasons import (
+    CAUSE_CODES,
+    CAUSE_PRECEDENCE,
+    InconclusiveCode,
+    InconclusiveReason,
+    most_significant,
 )
 from .serialization import message_to_dict, to_json_text, to_jsonable
 from .side_effects import AFR_SIDE_EFFECT_ATTR, afr_tool, resolve_side_effect
@@ -64,6 +64,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "run_replay": ("replay.langgraph_adapter", "run_replay"),
     "apply_plan_to_recorder": ("replay.langgraph_adapter", "apply_plan_to_recorder"),
     "default_initial_state": ("replay.langgraph_adapter", "default_initial_state"),
+    # OpenAI Agents SDK 接入层：录制侧接管模型与工具，回放侧在 replay/ 下
+    "FlightRecorderModel": ("openai_agents", "FlightRecorderModel"),
+    "instrument_agent": ("openai_agents", "instrument_agent"),
+    "ReplayModel": ("replay.openai_agents_adapter", "ReplayModel"),
+    "run_openai_agents_replay": ("replay.openai_agents_adapter", "run_replay"),
     # OTel 导出
     "events_to_genai_spans": ("otel", "events_to_genai_spans"),
 }
@@ -107,6 +112,7 @@ __all__ = [
     "EventType",
     "FailingTransport",
     "FlightRecorderMiddleware",
+    "FlightRecorderModel",
     "HttpTransport",
     "IngestRequest",
     "IngestResponse",
@@ -118,6 +124,7 @@ __all__ = [
     "RecorderStats",
     "ReplayBudget",
     "ReplayMiddleware",
+    "ReplayModel",
     "ReplayPreset",
     "RunRecord",
     "RunStatus",
@@ -134,6 +141,7 @@ __all__ = [
     "doctor",
     "estimate_cost",
     "events_to_genai_spans",
+    "instrument_agent",
     "message_to_dict",
     "new_id",
     "load_agent_specs",
@@ -141,6 +149,7 @@ __all__ = [
     "resolve_agent_spec",
     "resolve_side_effect",
     "run_replay",
+    "run_openai_agents_replay",
     "summarize_events",
     "to_json_text",
     "to_jsonable",

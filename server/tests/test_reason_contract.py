@@ -159,7 +159,9 @@ PYTHON_PRODUCTION_SITES: dict[str, tuple[str, str]] = {
         "InconclusiveCode.TRUNCATED_CONTEXT.value",
     ),
     "missing_recorded_response": (
-        "sdk/agent_flight_recorder/replay/langgraph_adapter.py",
+        # 第二个框架接入后，这条成因的产生点收敛到两个适配层共用的边界层：
+        # 工具步骤缺匹配结果时的成因只有一处实现（此前长在 LangGraph 适配层里）。
+        "sdk/agent_flight_recorder/replay/boundary.py",
         "InconclusiveCode.MISSING_RECORDED_RESPONSE.value",
     ),
     "missing_initial_state": (

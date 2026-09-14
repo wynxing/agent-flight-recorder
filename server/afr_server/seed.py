@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 
 from agent_flight_recorder.recorder import Recorder
 from agent_flight_recorder.registry import AgentSpec, load_agent_specs
@@ -15,6 +16,23 @@ from .transport import DirectTransport
 logger = logging.getLogger(__name__)
 
 
+def pick_seed_spec(specs: Iterable[AgentSpec]) -> AgentSpec | None:
+    """从注册表里挑出要播种的那个 Agent：按**名字**排序后取第一个。
+
+    这里刻意不依赖注册顺序。注册了第二个 Agent 之后，「第一个」不再是一个稳定概念：
+    entry point 的返回顺序由安装元数据决定，实测会把后注册的那个排在前面。播种结果
+    因此不再可复现——同一个仓库在两台机器上可能种出不同的示例数据，而平台自带的用例
+    正是建立在这条父 Run 之上的。
+
+    按名字排序同时保持了此前的行为：只有一个可播种 Agent 时，它就是被选中的那个。
+    """
+
+    candidates = sorted(
+        (spec for spec in specs if spec.seed is not None), key=lambda spec: spec.name
+    )
+    return candidates[0] if candidates else None
+
+
 def seed_if_empty() -> str | None:
     with session_scope() as session:
         _, total = list_runs(session, limit=1)
@@ -22,11 +40,11 @@ def seed_if_empty() -> str | None:
         return None
 
     specs = [spec for spec in load_agent_specs().values() if spec.seed is not None]
-    if not specs:
+    spec = pick_seed_spec(specs)
+    if spec is None:
         logger.info("没有注册可播种的 Agent，跳过 seed")
         return None
 
-    spec = specs[0]
     recorder = Recorder(
         spec.name,
         model=spec.default_model,
