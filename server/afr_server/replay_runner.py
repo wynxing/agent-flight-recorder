@@ -21,7 +21,7 @@ from agent_flight_recorder.models import (
     utcnow,
 )
 from agent_flight_recorder.recorder import Recorder
-from agent_flight_recorder.replay.budget import ReplayEstimate, estimate_replay_budget
+from agent_flight_recorder.replay.budget import BudgetLedger, ReplayEstimate, estimate_replay_budget
 from agent_flight_recorder.replay.engine import ReplayPlan, ReplaySession
 from agent_flight_recorder.replay.engine import ReplayExhaustedError, ensure_replay_context
 from agent_flight_recorder.replay.langgraph_adapter import apply_plan_to_recorder, run_replay
@@ -187,8 +187,18 @@ def _run_job(plan: ReplayPlan, replay_run_id: str) -> None:
         _record_failure(plan, replay_run_id, exc)
 
 
-def execute_replay(plan: ReplayPlan, replay_run_id: str):
-    """同步执行一次回放并返回 ReplayResult。失败时抛异常。"""
+def execute_replay(
+    plan: ReplayPlan,
+    replay_run_id: str,
+    *,
+    shared_ledger: BudgetLedger | None = None,
+):
+    """同步执行一次回放并返回 ReplayResult。失败时抛异常。
+
+    shared_ledger 是批量套件的整批账本（一次用例执行不传）：传了的话，这一次执行里
+    真实发生的模型调用也会记进整批的账。整批的「已用」因此不是事后数出来的第二套口径，
+    而是同一个账本实现写下的同一份数字。
+    """
 
     with session_scope() as session:
         parent_row = get_run(session, plan.parent_run_id)
@@ -219,7 +229,7 @@ def execute_replay(plan: ReplayPlan, replay_run_id: str):
     )
     apply_plan_to_recorder(plan, recorder)
 
-    session = ReplaySession(plan, parent_run, parent_events)
+    session = ReplaySession(plan, parent_run, parent_events, shared_ledger=shared_ledger)
     try:
         result = run_replay(
             session=session,

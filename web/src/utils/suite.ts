@@ -13,6 +13,9 @@
  * 2. **每个短语只指向一个数**。同一张卡片上：
  *    已完成 = completed，未完成 = unfinished，拿不到结论 = undecided，
  *    通过 / 未通过 / 无法判断 / 执行出错 各自等于同名的计数。
+ * 3. **「没跑」要说清为什么**。未完成里有一类是「未启动（因批次预算用尽）」：它不是
+ *    「还没轮到」，而是「不会再轮到」。这个数单独给出（not_started），因为用户看到它
+ *    该做的是调上限，而不是继续等。
  *
  * 这与本项目「结论只说证据支持的事」的立场同源，也与第 3 轮区分 inconclusive 与 failed 同源。
  */
@@ -24,7 +27,36 @@ export interface ConditionProgress {
   determinable: number
   undecided: number
   unfinished: number
+  /** 未完成里「因批次预算用尽而未启动」的那部分（unfinished 的子集）。 */
+  not_started?: number
   determinable_rate?: number | null
+}
+
+/**
+ * 「未启动」的原因。整批预算用尽才会产生这个状态，因此这句话只有这一个来源：
+ * 服务端 suites.NOT_STARTED_REASON 与这里必须逐字一致（由跨语言契约测试钉住，
+ * 见 server/tests/test_suite_budget.py）。
+ */
+export const NOT_STARTED_REASON = '因批次预算用尽'
+
+/** 未启动格子的完整说法：状态 + 原因。看到它就该知道该去调什么。 */
+export function notStartedLabel(): string {
+  return '未启动（' + NOT_STARTED_REASON + '）'
+}
+
+/**
+ * 「未完成」这一格的构成说明。没有未启动的格子时是空串（那句话说不出任何东西）。
+ *
+ * 两个数分开给：未完成 = 还没轮到 + 因整批预算用尽而未启动。合成一个数，用户就分不清
+ * 该继续等，还是该去调上限。
+ */
+export function unfinishedBreakdown(progress: {
+  unfinished: number
+  not_started?: number
+}): string {
+  const count = progress.not_started
+  if (!count || count <= 0) return ''
+  return '，其中 ' + count + ' 条' + notStartedLabel()
 }
 
 /**
@@ -38,7 +70,7 @@ export function conditionVerdict(group: ConditionProgress): string {
   if (group.unfinished > 0) {
     return (
       '共 ' + group.total + ' 条：已完成 ' + group.completed +
-      '、未完成 ' + group.unfinished
+      '、未完成 ' + group.unfinished + unfinishedBreakdown(group)
     )
   }
   return group.total + ' 条中 ' + group.undecided + ' 条拿不到结论'
@@ -61,6 +93,30 @@ export function determinableRateText(group: ConditionProgress): string {
 export function causeDrillLabel(count: number): string {
   return '展开 ' + count + ' 条拿不到结论的成因'
 }
+
+/** 批次的生命周期，用于标题行的角标。 */
+export interface BatchLifecycle {
+  status: string
+  /** 整批是否因预算触顶而停止。 */
+  exceeded?: boolean | null
+  /** 因整批预算用尽而没跑的格子数。 */
+  not_started?: number | null
+}
+
+/**
+ * 批次角标的一句话。「已完成」只能指向一个数（completed），因此**触顶而停止的批次不许
+ * 显示它**：那种批次里还有格子从未跑过，「已完成」与紧邻的「已完成 X / Y」会变成同词两义，
+ * 也等于把「没跑完」说成「跑完了」——那正是这一轮反复强调不许出现的措辞。
+ *
+ * 触顶（或有格子未启动）时说的是「已停止」：它陈述的是一个事实（不会再有格子启动了），
+ * 既没声称跑完，也没声称通过。
+ */
+export function batchLifecycleLabel(batch: BatchLifecycle): string {
+  if (batch.status === 'running') return '进行中'
+  if (batch.exceeded || (batch.not_started ?? 0) > 0) return '已停止'
+  return '已完成'
+}
+
 /**
  * 条件的可读标签：只写这个条件**实际覆盖了**什么。
  *

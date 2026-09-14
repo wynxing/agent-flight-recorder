@@ -154,6 +154,8 @@ class ReplaySession:
         plan: ReplayPlan,
         parent_run: RunRecord,
         parent_events: Sequence[Event],
+        *,
+        shared_ledger: BudgetLedger | None = None,
     ) -> None:
         self.plan = plan
         self.parent_run = parent_run
@@ -167,6 +169,10 @@ class ReplaySession:
         self.steps: list[StepPlan] = []
         #: 预算账本。只记真实发生的模型调用；recorded 复现既不计次也不计费。
         self.ledger = BudgetLedger(self.plan.budget)
+        #: 另一个（更高层的）账本。批量套件把整批的账本传进来，于是同一次真实调用会同时
+        #: 记进这一格的账与整批的账。整批的「已用」因此与单次回放共用同一份实现，
+        #: 不需要事后再去数一遍事件——那种做法会长出第二套记账口径，两边迟早对不上。
+        self.shared_ledger = shared_ledger
         #: 已判定的成因（结构化的）。一旦置上，后续步骤不再解析。
         self.incomplete_reason: InconclusiveReason | None = None
 
@@ -294,9 +300,15 @@ class ReplaySession:
     # ------------------------------------------------------------------ 效果
 
     def record_live_model_call(self, cost_usd: float | None) -> None:
-        """记一次已经完成的真实模型调用。由适配层在调用返回后调用。"""
+        """记一次已经完成的真实模型调用。由适配层在调用返回后调用。
+
+        带着整批账本时同一次调用也记进整批账本（见 shared_ledger）：调用真的发生了
+        就进账，哪怕这一次回放自己因为上限停在了下一步。
+        """
 
         self.ledger.note_model_call(cost_usd)
+        if self.shared_ledger is not None:
+            self.shared_ledger.note_model_call(cost_usd)
 
     def budget_usage(self) -> BudgetUsage:
         """当前账目（已用 / 上限 / 是否触顶）。"""

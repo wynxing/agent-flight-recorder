@@ -48,6 +48,8 @@ def init_db() -> None:
 #: 因此这里只做最小、可重入的补齐：create_all 不会给已存在的表加列。
 _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "cases": {"last_cause": "JSON", "last_condition": "JSON"},
+    # 整批预算：声明的上限与整批的记账都是后加的字段，旧库要能直接补上。
+    "suites": {"budget": "JSON", "budget_usage": "JSON"},
 }
 
 

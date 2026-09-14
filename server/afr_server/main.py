@@ -49,6 +49,7 @@ from .schemas import (
     RunListResponse,
     RunListItem,
     SuiteDetailResponse,
+    SuiteEstimateResponse,
     SuiteListResponse,
     SuiteSubmitRequest,
     SuiteSubmitResponse,
@@ -58,7 +59,13 @@ from .schemas import (
     replay_meta_to_dict,
 )
 from .seed import seed_if_empty
-from .suites import SuiteRequestError, submit_suite, suite_payload, suite_summaries
+from .suites import (
+    SuiteRequestError,
+    estimate_suite,
+    submit_suite,
+    suite_payload,
+    suite_summaries,
+)
 from .storage import (
     get_case,
     get_events,
@@ -480,6 +487,7 @@ def submit_suite_endpoint(payload: SuiteSubmitRequest) -> SuiteSubmitResponse:
             case_ids=payload.case_ids,
             all_cases=payload.all_cases,
             conditions=[condition.model_dump() for condition in payload.conditions],
+            budget=payload.budget,
         )
     except SuiteRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -492,6 +500,27 @@ def submit_suite_endpoint(payload: SuiteSubmitRequest) -> SuiteSubmitResponse:
         total=int(body.get("total", 0)),
         conditions=payload.conditions,
     )
+
+
+@app.post("/v1/suites/estimate", response_model=SuiteEstimateResponse)
+def estimate_suite_endpoint(payload: SuiteSubmitRequest) -> SuiteEstimateResponse:
+    """预估整批要花多少：一堆格子合起来预计几次真实模型调用、大概多少成本。
+
+    只读：不调用任何模型，也不创建批次。父 Run 缺 token 记录、或模型不在本地价格表内时，
+    成本如实返回 null（无法预估）并给出原因，而不是给一个编出来的数字——只要有一格给不出
+    成本，整批就不报数字。
+    """
+
+    try:
+        body = estimate_suite(
+            case_ids=payload.case_ids,
+            all_cases=payload.all_cases,
+            conditions=[condition.model_dump() for condition in payload.conditions],
+            budget=payload.budget,
+        )
+    except SuiteRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return SuiteEstimateResponse(**body)
 
 
 @app.get("/v1/suites", response_model=SuiteListResponse)

@@ -22,6 +22,7 @@ from agent_flight_recorder.models import (
     utcnow,
 )
 from agent_flight_recorder.replay.engine import ReplayPlan
+from agent_flight_recorder.replay.budget import BudgetLedger
 from agent_flight_recorder.replay.reasons import (
     InconclusiveCode,
     InconclusiveReason,
@@ -154,6 +155,7 @@ def run_case_blocking(
     budget: ReplayBudget | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    shared_ledger: BudgetLedger | None = None,
     on_started: Callable[[str], None] | None = None,
     on_result: ResultHook | None = None,
     condition: dict[str, Any] | None = None,
@@ -165,6 +167,9 @@ def run_case_blocking(
 
     on_started / on_result 是给批量套件的观察点：格子要在执行前就拿到回放 Run 的
     ID，执行后拿到结论与成因。单条执行路径不传它们，行为与以前逐字一致。
+
+    shared_ledger 也是给批量套件的：整批的账本传下来，这一次执行里真正发生的模型调用
+    会同时记进它。单条执行不传，账目只落在自己身上。
     """
 
     run_id, plan, snapshot = _prepare_case_run(
@@ -178,7 +183,15 @@ def run_case_blocking(
     )
     if on_started is not None:
         on_started(run_id)
-    _job(plan, run_id, case_id, snapshot, on_result=on_result, condition=condition)
+    _job(
+        plan,
+        run_id,
+        case_id,
+        snapshot,
+        on_result=on_result,
+        condition=condition,
+        shared_ledger=shared_ledger,
+    )
     return run_id
 
 
@@ -216,24 +229,56 @@ def _prepare_case_run(
 
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
     # 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
-    resolved_preset = preset or _preset(snapshot.get("preset"))
-    if system_prompt is not None and resolved_preset is None:
-        resolved_preset = ReplayPreset.REGRESS
-
     # 计划在提交前就确定，回放 Run 也因此可以立刻可见，而不是等第一批事件落库。
-    plan = build_plan(
-        snapshot["source_run_id"],
-        from_seq=from_seq or snapshot["from_seq"] or 1,
-        preset=resolved_preset,
-        policy=policy or _policy(snapshot.get("policy")),
-        # 上限只约束这一次执行；批量级的聚合预算不在本轮范围（见 issue #12 的非目标）。
+    plan = resolve_plan(
+        snapshot,
+        from_seq=from_seq,
+        preset=preset,
+        policy=policy,
+        # 上限只约束这一次执行。整批的上限不在这里：套件层在启动每一格之前把「整批剩余」
+        # 作为这一格的额度分下来（见 suites.py），因此这里拿到的额度天然不会越过整批上限。
         budget=budget,
-        model=model or snapshot.get("model"),
-        system_prompt=system_prompt if system_prompt is not None else snapshot.get("system_prompt"),
+        model=model,
+        system_prompt=system_prompt,
         labels={"case_id": case_id, "case_name": snapshot["name"]},
     )
     prepare_run(plan, run_id, case={"case_id": case_id, "name": snapshot["name"]})
     return run_id, plan, snapshot
+
+
+def resolve_plan(
+    snapshot: dict[str, Any],
+    *,
+    from_seq: int | None = None,
+    preset: ReplayPreset | None = None,
+    policy: EffectPolicy | None = None,
+    budget: ReplayBudget | None = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
+    labels: dict[str, str] | None = None,
+) -> ReplayPlan:
+    """把「一次用例执行」解析成回放计划。
+
+    执行与整批预估共用这一处：什么时候算回归模式只有这一份判定。两边各写一份的话，
+    预估出来的调用量就会与真的跑出来的不是同一件事，而这种偏差在界面上看不出来。
+    """
+
+    # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
+    # 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
+    resolved_preset = preset or _preset(snapshot.get("preset"))
+    if system_prompt is not None and resolved_preset is None:
+        resolved_preset = ReplayPreset.REGRESS
+
+    return build_plan(
+        snapshot["source_run_id"],
+        from_seq=from_seq or snapshot["from_seq"] or 1,
+        preset=resolved_preset,
+        policy=policy or _policy(snapshot.get("policy")),
+        budget=budget,
+        model=model or snapshot.get("model"),
+        system_prompt=system_prompt if system_prompt is not None else snapshot.get("system_prompt"),
+        labels=dict(labels or {}),
+    )
 
 
 def _job(
@@ -244,14 +289,23 @@ def _job(
     *,
     on_result: ResultHook | None = None,
     condition: dict[str, Any] | None = None,
+    shared_ledger: BudgetLedger | None = None,
 ) -> None:
     try:
-        if on_result is None and condition is None:
+        if on_result is None and condition is None and shared_ledger is None:
             # 单条执行路径原样调用：有些调用方（含测试替身）只按位置接收参数，
             # 不该因为多了一个批量专用观察点而被迫改签名。
             _execute(plan, run_id, case_id, snapshot)
         else:
-            _execute(plan, run_id, case_id, snapshot, on_result=on_result, condition=condition)
+            _execute(
+                plan,
+                run_id,
+                case_id,
+                snapshot,
+                on_result=on_result,
+                condition=condition,
+                shared_ledger=shared_ledger,
+            )
     except Exception as exc:  # noqa: BLE001 - 后台任务失败也要给出结论
         logger.warning("case run failed: %s", exc)
         results = [
@@ -275,8 +329,11 @@ def _execute(
     *,
     on_result: ResultHook | None = None,
     condition: dict[str, Any] | None = None,
+    shared_ledger: BudgetLedger | None = None,
 ) -> None:
-    result = execute_replay(plan, run_id)
+    # 没有整批账本时不多传参数：单条执行路径的调用方（含测试替身）签名因此一字未改。
+    batch_args: dict[str, Any] = {"shared_ledger": shared_ledger} if shared_ledger is not None else {}
+    result = execute_replay(plan, run_id, **batch_args)
 
     with session_scope() as session:
         events = get_events(session, run_id)

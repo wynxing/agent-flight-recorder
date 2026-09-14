@@ -285,7 +285,30 @@ export interface SuiteConditionInfo {
   preset?: string | null
 }
 
-export type SuiteItemStatus = 'pending' | 'running' | 'passed' | 'failed' | 'inconclusive' | 'error'
+/**
+ * 一个格子的状态闭集。前三个是未完成态（没有结论），后四个是有结论态。
+ *
+ * not_started 是「未启动（因批次预算用尽）」：格子从未被执行过。它与 pending 不是一回事
+ * ——pending 是「还没轮到」，not_started 是「不会再轮到」。因此它既不是 failed，也不是
+ * 「跑过了但拿不到结论」。
+ */
+export type SuiteItemStatus =
+  | 'pending'
+  | 'running'
+  | 'not_started'
+  | 'passed'
+  | 'failed'
+  | 'inconclusive'
+  | 'error'
+
+/**
+ * 整批的预算记账。字段与单次回放的记账完全一样（服务端复用同一个 BudgetUsage），
+ * 只多 not_started 一个计数——「有多少个格子根本没跑」是批次才有的概念。
+ */
+export interface SuiteBudgetUsage extends ReplayBudgetUsage {
+  /** 因批次预算用尽而没跑的格子数：它们没有任何结论，不计入 failed 或 undecided。 */
+  not_started: number
+}
 
 /** 套件里的一格：某条用例在某个条件下的结论。条件跟着结果一起回来，结论因此没有歧义。 */
 export interface SuiteItem {
@@ -320,8 +343,13 @@ export interface SuiteConditionGroup {
   counts: Record<string, number>
   determinable: number
   undecided: number
-  /** 还没跑完的格子数（pending + running）。它不是结论，必须能与 undecided 区分开。 */
+  /**
+   * 还没跑完的格子数（pending + running + not_started）。它不是结论，必须能与
+   * undecided 区分开。
+   */
   unfinished: number
+  /** 其中「未启动（因批次预算用尽）」的格子数。它是 unfinished 的子集。 */
+  not_started: number
   determinable_rate?: number | null
   errors: number
   items: SuiteItem[]
@@ -338,7 +366,18 @@ export interface SuiteDetail {
   completed: number
   counts: Record<string, number>
   errors: number
+  /** 整批的预算记账；没声明过整批上限时为 null（不设上限不等于「上限为 0」）。 */
+  budget?: SuiteBudgetUsage | null
   groups: SuiteConditionGroup[]
+}
+
+/** 整批的预估。cost_usd 为 null 就是「无法预估」：只要有一格给不出成本，整批就不报数字。 */
+export interface SuiteEstimateResponse {
+  cells: number
+  model_calls: number
+  cost_usd?: number | null
+  cost_is_estimate: boolean
+  detail: string
 }
 
 export interface SuiteSummary {
