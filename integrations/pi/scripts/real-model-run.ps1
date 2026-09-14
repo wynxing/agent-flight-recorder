@@ -21,7 +21,7 @@ param(
     [string]$Model = 'deepseek-v4.1-flash',
     [string]$Provider = 'msee-gateway',
     [string]$ToolSource = 'snapshot',
-    [int]$BudgetModels = 240,
+    [int]$BudgetModels = 400,
     [double]$BudgetCostUsd = 2.0,
     [string]$Out = 'artifacts/round8',
     [switch]$CheckOnly
