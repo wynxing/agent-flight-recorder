@@ -4,8 +4,11 @@
 同一套复现语义在**第二个框架**上是否同样成立。最重要的一条仍然是复现的确定性；
 除此之外，本文件还包含三条只在「有两个框架」时才可能成立的证据：
 
-* 两个框架录下来的行为内容逐字段一致（同一份场景、同一批台词）；
-* **同一份录制**分别用两个适配层回放，结论与产出完全一致；
+* 两个框架录下来的**行为指纹**（定义好的语义内容：事件类型与名称、工具参数、模型输出文本、
+  工具调用的名称与参数）一致（同一份场景、同一批台词）；
+* **同一份录制**分别用两个适配层回放，**行为指纹与最终产出**相等。这不是「完整 Event 逐字段
+  相等」：框架自己的消息/状态外壳与运行身份字段本来就不同，逐字段的边界由
+  `test_cross_framework_difference_is_confined_to_the_framework_envelope` 钉住；
 * 平台按 Agent 自己声明的 runtime 选择适配层（服务端不再只认识 LangGraph）。
 """
 
@@ -52,8 +55,9 @@ def behavioral_fingerprint(events) -> list[tuple]:
     不覆盖：事件里的其余字段——包括运行身份（id / run_id / started_at）与**框架自己的
     消息/状态外壳**（input.messages、output.message、output.state）。后者在两个框架之间
     本来就不一样（LangChain 是 AIMessage 的 dict，Agents SDK 是 Responses API 的条目），
-    因此「两个框架逐字一致」这句话只能限定在这条指纹 + final output 上；全部字段的边界
-    由 test_cross_framework_difference_is_confined_to_the_framework_envelope 钉住。
+    因此「两个框架一致」这句话只能限定在这条指纹 + final output 上，**不是**完整 Event
+    逐字段相等；全部字段的边界由 test_cross_framework_difference_is_confined_to_the_framework_envelope
+    钉住，而这条指纹「确实覆盖了这些语义字段」由 test_the_fingerprint_covers_the_semantic_content 钉住。
     """
 
     fingerprint = []
@@ -128,7 +132,11 @@ def test_parent_run_ends_with_the_wrong_conclusion(parent_run: str) -> None:
 
 
 def test_reproduce_is_deterministic(parent_run: str) -> None:
-    """回放可信度的地基：除时间戳、ID 与 effect_source 外逐字段一致。"""
+    """回放可信度的地基：行为指纹（语义内容）与最终产出与父 Run 相等。
+
+    刻意不说「除运行时字段外逐字段一致」：那条更强的话不成立（见 `behavioral_fingerprint` 的
+    说明）。跨框架的字段级边界另有一条断言。
+    """
 
     plan = ReplayPlan.reproduce(parent_run, from_seq=1)
     result = replay_runner.execute_replay(plan, "repro-run")
@@ -383,9 +391,11 @@ def _replay_with(adapter: Any, parent: str, run_id: str, factory: Any, side_effe
 
 
 def test_the_two_frameworks_record_the_same_behavior(afr_db) -> None:
-    """同一份场景与台词在两个框架上产生逐字段一致的行为内容。
+    """同一份场景与台词在两个框架上产生一致的行为指纹（语义内容），最终产出也相同。
 
-    这是「两个框架可比」的前提：如果连录制都对不上，后面的对比就没有意义。
+    这是「两个框架可比」的前提：如果连录制的语义内容都对不上，后面的对比就没有意义。
+    这里比的是定义好的行为指纹与最终产出，**不是**完整 Event 逐字段相等（外壳与运行身份
+    字段本来就会不同）。
     """
 
     record_parent("lg-parent", agent_module=langgraph_agent)
@@ -397,6 +407,42 @@ def test_the_two_frameworks_record_the_same_behavior(afr_db) -> None:
 
     assert behavioral_fingerprint(langgraph_events) == behavioral_fingerprint(agents_events)
     assert storage.final_output_of(langgraph_events) == storage.final_output_of(agents_events)
+
+
+def test_the_fingerprint_covers_the_semantic_content(afr_db) -> None:
+    """行为指纹自己不能退化：它要是把语义字段丢了（极端情况是返回空列表），
+    本文件里所有基于它的「相等」断言都会变成空转——没有任何比较对象，永远相等。
+
+    这是「写了承诺却能被删掉而不被发现」的那一类：多个测试都只比较指纹，没人看它盖了什么。
+    这里把指纹的覆盖面钉成可执行的断言：每个模型调用与工具调用都各占一项，工具事件带正确的
+    名称与参数，模型事件带输出文本或工具调用。
+    """
+
+    parent = record_parent("fingerprint-parent", agent_module=langgraph_agent)
+    with session_scope() as session:
+        events = storage.get_events(session, parent)
+
+    fingerprint = behavioral_fingerprint(events)
+    kinds = [item[0] for item in fingerprint]
+    assert len(fingerprint) == 11, "行为指纹必须逐一覆盖每个行为步骤（6 次模型调用 + 5 次工具调用）"
+    assert kinds.count("model_call") == 6
+    assert kinds.count("tool_call") == 5
+
+    tools = [item for item in fingerprint if item[0] == "tool_call"]
+    assert [item[1] for item in tools] == [
+        "prometheus_query",
+        "loki_query",
+        "k8s_describe",
+        "github_deployments",
+        "notify_oncall",
+    ]
+    # 工具参数确实进了指纹（不是空串占位）。
+    assert all(item[2] and item[2] != "null" for item in tools)
+
+    models = [item for item in fingerprint if item[0] == "model_call"]
+    # 每次模型调用都带输出文本，且至少有一次带工具调用：两者都是指纹实际比较的内容。
+    assert all(item[3] for item in models)
+    assert any(item[4] for item in models)
 
 
 def test_the_same_recording_replays_identically_on_both_frameworks(afr_db) -> None:
@@ -446,7 +492,7 @@ def test_an_openai_agents_recording_can_be_replayed_by_the_langgraph_adapter(afr
     with session_scope() as session:
         replay_events = storage.get_events(session, "oa-repro-lg")
     assert behavioral_fingerprint(parent_events) == behavioral_fingerprint(replay_events)
-    # 指纹相等还不够：结论也要逐字一致（这句话同样要在证据里站得住）。
+    # 指纹相等还不够：最终产出也要相等（这句话同样要在证据里站得住）。
     assert storage.final_output_of(parent_events) == storage.final_output_of(replay_events)
 
 
