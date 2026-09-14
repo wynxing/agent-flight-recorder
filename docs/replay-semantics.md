@@ -197,7 +197,7 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 | `model_context_changed` | 解析兼容，暂无产生路径 | pi `runner` 复现路径（模型上下文与录制不一致） | 模型上下文与录制不一致 | 确认模型 / Prompt 是否被改动 |
 | `final_output_changed` | 解析兼容，暂无产生路径 | pi `runner` 复现路径（复现结论与录制不同） | 复现结论与录制不同 | 看运行对比定位第一个分叉点 |
 | `side_effect_blocked` | 服务端 `cases.py` 用例判定（闸门把写操作降级为 dry_run，或策略直接拒绝） | 解析兼容，暂无产生路径 | 副作用被闸门拦截，本次执行没有真实发生 | 确认安全后可显式允许真实执行 |
-| `budget_exceeded` | SDK `ReplaySession.next_step`（步边界上账目已达上限，且这一步真要真实执行） | 解析兼容，暂无产生路径 | 达到声明的成本 / 调用次数上限而停止，这次回放没有跑完 | 提高上限或缩小回放范围后重跑 |
+| `budget_exceeded` | SDK `ReplaySession.next_step`（步边界上账目已达上限，且这一步真要真实执行） | pi `src/runner.ts`（声明了上限的回归在步边界停下） | 达到声明的成本 / 调用次数上限而停止，这次回放没有跑完 | 提高上限或缩小回放范围后重跑 |
 | `unknown` | SDK `from_code` / `legacy` 兼容解析兜底；服务端 `cases.py` 的失败路径 | pi `runner`（非 `Incomplete` 的异常）、`cases.ts`（包不完整且没有成因） | 集合之外的取值 | 按保留的原始说明排查，并在上游补齐分类 |
 
 「**解析兼容，暂无产生路径**」是如实标注，不是待办：这些码在**读取**历史数据时必须认出
@@ -205,10 +205,14 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 真需要时另开 issue。另外注意 pi 的 `load` 会把包里已有的 `cause` 原样上抛（转发，不是生产），
 所以 pi 侧可能看到一个它自己不产生、而由服务端写下的码。
 
-`budget_exceeded` 在 pi 侧标成「解析兼容」不是遗漏：pi 运行器自己的
-`--max-models / --max-tools / --timeout-ms` 是它**自己的**运行预算，触顶时走的是它自己的
-错误路径（成因落 `unknown`、Run 状态 aborted）。把那条路径也接到这个码上是独立的一步，
-不在本轮范围内；本轮只保证两套语言的定义逐字一致。
+`budget_exceeded` 在 pi 侧的产生路径是**声明式预算**：`integrations/pi/src/runner.ts` 只在
+这一次执行真的声明了上限（`--budget-models` / `--budget-cost-usd`）时才启用账本，并在步边界
+抛出带 `budget_exceeded` 的 `Incomplete`（包 `complete = false`、Run 状态 `aborted`、判定
+`inconclusive`）。
+
+运行器自己的安全上限（`--max-models / --max-tools / --timeout-ms`）不属于这条路径：它们是
+运行器的运行限制，触顶时仍走执行错误（成因 `unknown`、状态 aborted）。因此**不声明预算的
+执行行为与加这套能力之前逐字一致**；两侧都由 `integrations/pi/test/budget.test.ts` 钉住。
 
 这张表不是说明文字：`server/tests/test_reason_contract.py` 会**读它**，把「声称某侧能产生」的
 集合拿去真实源码里核对产生点是否存在，并反过来要求标注「解析兼容」的码在那一侧的源码里
@@ -269,7 +273,8 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 | 控制台 | 「因预算停止」+ 已用 / 上限 / 是否触顶，而不是普通失败 |
 
 把它写成 `failed` / `error` 就是把「没跑完」说成「不通过」，这正是第 2、5 轮各返工过一次的
-同类错误。`budget_exceeded` 由引擎真的产生（`ReplaySession.next_step`），不是只声明。
+同类错误。`budget_exceeded` 由引擎真的产生（`ReplaySession.next_step`），不是只声明；pi 侧
+同样由真实路径产生（`integrations/pi/src/runner.ts`，声明了上限的回归在步边界停下）。
 
 ### 9.5 事后记账：已用 / 上限 / 是否触顶
 
@@ -298,7 +303,18 @@ pi 运行器（`integrations/pi/`）在回归时可以选择 `--tool-source snap
 而不是给一个编造的数字。计划里没有任何 live 模型调用时，预估是 0 次调用、0 成本——那是事实，
 不是猜测。
 
-### 9.7 这一层不做的
+### 9.7 pi 侧：同一套语义，只在声明预算时启用
+
+pi 运行器的批量预算（`--budget-models` / `--budget-cost-usd`）与本节是**同一套语义**，不是
+第二套字段名，也不是第二套判定：上限沿用 `max_cost_usd` / `max_model_calls` 两个维度，到达
+上限即停（步边界判定，已发出的调用照常记账），触顶取 `stopped_by` 的同一组机器值，成本未知
+**不是 0**（未知时成本这一维不参与判定）。
+
+停止时抛带 `budget_exceeded` 的 `Incomplete`：回放包 `complete = false`、状态 `aborted`、
+判定 `inconclusive`。整批的调度与 Python 侧同源：账到点之后**先记账再**把剩下的格子标成
+`not_started`（没有结论，也没有成因）。
+
+### 9.8 这一层不做的
 
 * 不做真实模型的费用对账：价格表仍是本地快照，所有数字都标注为估算。
 * 不做历史成本曲线与通过率趋势。

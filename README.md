@@ -155,6 +155,11 @@ LangGraph 分叉点之前的模型与工具调用使用录制结果；普通节�
 * **整批也声明得上限**：一次批量套件（用例 × 条件）可以在提交时声明这一批最多花多少。
   到点之后不再启动新格子，已启动的格子跑完并如实记账；没轮到的格子标成「未启动（因批次预算用尽）」，
   既不判失败、也不算「拿不到结论」。见 [回放语义](docs/replay-semantics.md) 第 10 节。
+* **pi 侧同名同义**：`integrations/pi` 的批量预算（`--budget-models` / `--budget-cost-usd`）用的是
+  同一套字段名与同一条判定（步边界硬停、`stopped_by` 取值、成本未知不是 0），触顶同样落
+  `inconclusive` + `budget_exceeded` + `aborted`，没轮到的样本记 `not_started`。只在真的声明了
+  上限时启用：**不声明预算的执行行为与加这套能力之前逐字一致**（运行器自己的 `--max-models` 等
+  安全上限仍走原来的执行错误路径）。见 [回放语义](docs/replay-semantics.md) 第 9.7 节。
 
 ### 平台做不到什么
 
@@ -222,6 +227,23 @@ uv run python -m sre_agent.run --model gpt-5-mini --prompt grounded
 ```
 
 同一个标识也可以直接填进控制台的「模型覆盖」，用于回归模式。
+
+### 真实模型的失败任务集（会花钱，手动跑）
+
+`integrations/pi` 里还有一套**代码调查**回归：固定提交 + 只读工具，模型必须给出结构化答案与准确
+源码引用。`validation/failure-suite.json` 是其中 baseline 真的会失败的那一套任务，用来回答
+「改完到底有没有变好」。
+
+```powershell
+$env:API_URL = 'https://<网关>/v1'   # 只写变量名，值不进仓库
+$env:API_KEY = '<网关密钥>'
+pwsh integrations/pi/scripts/real-model-run.ps1 -Samples 3
+```
+
+脚本按「免费自检 → 录制 → 免费预估 → 确认在声明的上限内 → 回归」的顺序跑；缺 `API_URL` 或
+`API_KEY` 时在任何真实调用之前停下并报错，不会退化成离线模型，也不会把凭证写进任何文件。
+**真实调用不进 `scripts/test.ps1`、不进 CI，也不作为任何隐式步骤。** 流程、上限与结果归档见
+[真实失败任务集](docs/pi-failure-suite.md)。
 
 ## 用例与断言
 

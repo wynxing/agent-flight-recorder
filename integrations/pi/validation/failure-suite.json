@@ -1,0 +1,132 @@
+{
+  "_comment": "真实失败任务集（第 8 轮）：每个任务的答案与引用都在固定提交上人工核对过；validate.ts 在执行前会逐条重验，过期引用立即拒绝。commit 字段是**被测提交**（本次真实模型运行调查的就是它），不是证据包的提交。",
+  "commit": "523d2ed4e77cda1884c245f2646e717e63d879d8",
+  "tasks": [
+    {
+      "id": "batch-budget-total-calls",
+      "question": "一次批量套件声明了「max_model_calls=2」，共 4 个格子；每个格子的回放计划里各有 3 次会真实执行的模型调用（其余步骤读取录制结果）。这次批量实际会真实发生多少次模型调用？只回答整数。",
+      "files": [
+        "server/afr_server/suites.py",
+        "sdk/agent_flight_recorder/replay/engine.py",
+        "sdk/agent_flight_recorder/replay/budget.py"
+      ],
+      "answer": 2,
+      "evidence": [
+        {
+          "path": "sdk/agent_flight_recorder/replay/engine.py",
+          "line": 277,
+          "quote": "stopped_by = self.ledger.exceeded_by()"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/replay/budget.py",
+          "line": 106,
+          "quote": "if limit is not None and self.model_calls_used >= limit:"
+        },
+        {
+          "path": "server/afr_server/suites.py",
+          "line": 500,
+          "quote": "budget=ledger.remaining(),"
+        }
+      ]
+    },
+    {
+      "id": "cause-precedence-blocked-vs-budget",
+      "question": "一次回归回放同时满足两件事：模型调用达到预算上限而在步边界停止；并且这次回放里真实执行过被副作用闸门降级为 dry_run 的工具。用例最终保存的 last_cause.code 是哪一个码？只回答该码。",
+      "files": [
+        "server/afr_server/cases.py",
+        "sdk/agent_flight_recorder/replay/reasons.py"
+      ],
+      "answer": "side_effect_blocked",
+      "evidence": [
+        {
+          "path": "server/afr_server/cases.py",
+          "line": 373,
+          "quote": "cause = most_significant(causes)"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/replay/reasons.py",
+          "line": 71,
+          "quote": "InconclusiveCode.SIDE_EFFECT_BLOCKED.value: 9,"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/replay/reasons.py",
+          "line": 73,
+          "quote": "InconclusiveCode.BUDGET_EXCEEDED.value: 10,"
+        }
+      ]
+    },
+    {
+      "id": "write-tool-gate-on-recorded-regress",
+      "question": "在一份按 EffectPolicy.regress()（模型调用 live、工具调用沿用录制结果）执行的回归回放里，父 Run 中那个 SideEffect.WRITE 的写工具步骤会被副作用闸门降级成 dry_run 吗？回答布尔值。",
+      "files": [
+        "sdk/agent_flight_recorder/models.py",
+        "sdk/agent_flight_recorder/replay/engine.py"
+      ],
+      "answer": false,
+      "evidence": [
+        {
+          "path": "sdk/agent_flight_recorder/models.py",
+          "line": 147,
+          "quote": "by_kind={EventType.MODEL_CALL.value: EffectMode.LIVE},"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/models.py",
+          "line": 172,
+          "quote": "if kind != EventType.TOOL_CALL.value or mode is not EffectMode.LIVE:"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/replay/engine.py",
+          "line": 263,
+          "quote": "decision = self.plan.policy.resolve(seq=reference.seq, kind=kind, side_effect=side_effect)"
+        }
+      ]
+    },
+    {
+      "id": "unknown-cost-does-not-stop",
+      "question": "整批声明了 max_cost_usd，但账本里的成本是「未知」（有真实调用无法按本地价格表定价）：这一批会因成本上限而停止吗？回答布尔值。",
+      "files": [
+        "sdk/agent_flight_recorder/replay/budget.py"
+      ],
+      "answer": false,
+      "evidence": [
+        {
+          "path": "sdk/agent_flight_recorder/replay/budget.py",
+          "line": 96,
+          "quote": "return None if self._cost_unknown else round(self._cost, 6)"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/replay/budget.py",
+          "line": 108,
+          "quote": "cost = self.cost_used_usd"
+        },
+        {
+          "path": "sdk/agent_flight_recorder/replay/budget.py",
+          "line": 110,
+          "quote": "if cap is not None and cost is not None and cost >= cap:"
+        }
+      ]
+    },
+    {
+      "id": "pi-tape-mismatch-code",
+      "question": "pi 运行器以 recorded 为工具来源做回归时，模型换了 grep 参数、录制的工具结果匹配不上：运行器会立刻停下来，并且回放包最终记录的 cause.code 是哪个码？只回答该码。",
+      "files": [
+        "integrations/pi/src/core.ts",
+        "integrations/pi/src/runner.ts"
+      ],
+      "answer": "missing_recorded_response",
+      "evidence": [
+        {
+          "path": "integrations/pi/src/core.ts",
+          "line": 61,
+          "quote": "'missing_recorded_response',"
+        },
+        {
+          "path": "integrations/pi/src/runner.ts",
+          "line": 208,
+          "quote": "b.cause=err instanceof Incomplete ? err.cause : cause('unknown', err.message);"
+        }
+      ]
+    }
+  ]
+}
+

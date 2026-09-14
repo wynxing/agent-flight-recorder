@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, lstat, readdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { cause, reasonOf, type InconclusiveCode, type InconclusiveReason } from './reasons.ts';
+import type { BudgetUsage } from './budget.ts';
 
 export type Verdict = 'passed' | 'failed' | 'inconclusive' | 'error';
 export class Incomplete extends Error {
@@ -41,6 +42,11 @@ export interface Bundle {
   /** 旧包里的自由文本 reason 原文。 */
   legacyReason?: string;
   status: 'succeeded' | 'failed' | 'aborted'; verdict?: Verdict;
+  /**
+   * 预算记账（已用 / 上限 / 是否触顶）。**只有声明了上限的执行才有它**：
+   * 不声明预算时行为与加这套能力之前逐字一致，不会凭空多出一个「上限：无」的账目。
+   */
+  budget?: BudgetUsage;
 }
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));

@@ -84,3 +84,38 @@ npm run validate -- --repo ../.. --provider PROVIDER --model MODEL --out artifac
 `results.json` 记录通过、失败、无法判断、错误，以及模型调用数、token 与耗时。人工负向控制单列，不参与真实模型统计。准确源码引用是较严格的判定条件，未通过时要区分格式/引用问题与实质判断错误。没有修复现象就报告没有观察到修复；录制覆盖不足不解释为模型退化。
 
 当前执行状态见 [验证记录](../../docs/pi-validation.md)。真实模型请求不会作为 CI 的隐式步骤。
+
+## 批量预算与阶段（真实模型轮用）
+
+`validate.ts` 分四个阶段，为的是让「先声明上限再花钱」可以真的被执行：
+
+| 阶段 | 花钱 | 做什么 |
+| --- | --- | --- |
+| `check` | 否 | 逐条核对每个任务的预期引用在固定提交上仍然成立；顺带解析 provider/model，名字打错或模型不在配置里当场报错 |
+| `record` | 是 | 每个任务录制一次，作为两个条件的公共父 Run（已有可用录制则直接复用，不重复花钱） |
+| `estimate` | 否 | 按父录制里真实发生的调用量与成本，预估整批（两个条件 × 采样数）要花多少 |
+| `regress` | 是 | 条件矩阵：baseline / grounded × 采样数 |
+
+`all` 是默认值（record + regress），与加这些选项之前的行为一致。回归一律带 `--phase regress` 时才会跑。
+
+声明的上限与平台是**同一套语义**（字段名、步边界硬停、`stopped_by` 取值、成本未知不是 0）：
+
+```powershell
+npm run validate -- --repo ../.. --provider P --model M --models-path artifacts/models.json `
+  --suite validation/failure-suite.json --phase regress --samples 3 `
+  --budget-models 240 --budget-cost-usd 2.0 --out artifacts/round8
+```
+
+触顶时：已经发出的那次调用跑完并记账，之后这一次执行落 `inconclusive` + 成因码 `budget_exceeded`
+（Run 状态 `aborted`，不是失败）；**还没轮到的样本记成 `not_started`：没有结论，也没有成因**。
+成本维只在成本可定价时参与判定——未知就是未知，不会被当成 0。
+
+`--max-models / --max-tools / --timeout-ms` 是运行器自己的安全上限，不是声明的预算：它们触顶时
+仍是一次执行错误。因此**不声明预算的执行行为与加这套能力之前逐字一致**（两侧都有测试钉住）。
+
+每次运行都会写 `archive.json`：每个样本的条件、结论、成因、模型调用数、token、成本与包哈希；
+整批的「声明上限 / 已用 / 是否触顶 / 未启动格子」也在一起，报告里的每个数字都能回到它。
+
+真实模型轮怎么跑（含上限与顺序）见 [真实失败任务集](../../docs/pi-failure-suite.md)；
+`scripts/real-model-run.ps1` 是那条流程的可执行入口，缺 `API_URL` / `API_KEY` 时在任何真实调用
+之前停下并报错，不会退化成离线模型。
