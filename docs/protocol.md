@@ -223,7 +223,7 @@ pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器
 ## 7. 批量套件
 
 批量运行（一次跑一批用例 × 一组条件）不改变上面的上报协议，它的契约只在服务端与控制台之间。
-五条约定是硬约束，不是实现细节：
+六条约定是硬约束，不是实现细节：
 
 1. **条件随结果记录。** 每个格子都带 `condition = {prompt, model, system_prompt, preset}`，
    `prompt` / `model` 由请求给出，`system_prompt` 是执行当时解析出来的 Prompt 正文，
@@ -253,23 +253,42 @@ pi 使用 `metadata.runtime="pi"` 与 `labels.runtime="pi"`，由本地运行器
    逐字一致。到点之后**不再启动新格子**，已启动的格子跑完并如实记账，没轮到的格子状态是
    `not_started`（呈现为「未启动（因批次预算用尽）」），它没有结论、没有成因，
    因此不计入 `failed`、也不计入 `undecided`，而是归在 `unfinished` 一侧。
+6. **结论归属于提交那一刻的用例集版本。** 提交时把这一批用到的用例定义固化成一份可寻址的版本
+   （`cs1:<内容摘要>`，见 architecture.md 第 4.5 节），套件与每个格子都带着它，按标识能反查
+   **当时**那一份定义。标识是内容决定的：只改一条用例的断言或起点就会得到另一个版本，同一份定义
+   跑两遍仍是同一版。**每格执行的是提交那一刻冻结的那一份快照**，执行期不再读用例行，因此
+   批次执行期间用例被编辑不会造成「前半批按旧断言、后半批按新断言，却报成一个数」。
+   `case_set.drift` 如实提示「这些用例自本批之后被改动过 / 已经找不到」，它只说用例页的内容
+   变了，**不改变本批任何一条结论的归属**。历史批次（版本化之前创建的）读出来是 `null`，
+   即「无版本记录」——不按当前用例反推一个版本号补上去。
 
 ```
 POST /v1/suites            {case_ids: [..] | all_cases: true, conditions: [{prompt, model}],
                             budget?: {max_cost_usd?, max_model_calls?}}
-                           -> {suite_id, status, total, conditions}     # 立即返回，执行在后台
+                           -> {suite_id, status, total, conditions, case_set_version}
+                              # 立即返回，执行在后台；归属在提交那一刻就已确定
 POST /v1/suites/estimate   {case_ids [..] | all_cases: true, conditions, budget?}
                            -> {cells, model_calls, cost_usd, cost_is_estimate, detail}
                               # 只读：不调用模型、不创建批次；成本给不出来时是 null + 原因
-GET  /v1/suites            -> {suites: [{id, status, total, completed, counts, errors, ...}]}
+GET  /v1/suites            -> {suites: [{id, status, total, completed, counts, errors,
+                                          case_set_version, ...}]}
 GET  /v1/suites/{id}       -> {id, status, total, completed, counts, errors,
                                budget: {max_cost_usd, max_model_calls, model_calls_used,
                                         cost_used_usd, cost_is_estimate, exceeded, stopped_by,
                                         cost_unknown, not_started, detail} | null,
+                               case_set: {id, canonicalization, case_count, recorded,
+                                          recorded_at, drift: {changed, missing, unchanged}} | null,
                                groups: [{condition, label, total, completed, counts,
                                          determinable, undecided, unfinished, not_started,
                                          determinable_rate, errors,
-                                         items: [{case_id, condition, status, run_id, results, cause}]}]}
+                                         items: [{case_id, case_set_version, condition, status,
+                                                  run_id, results, cause}]}]}
+GET  /v1/case-set-versions/{id}
+                           -> {id, canonicalization, case_count, recorded_at,
+                               cases: [{case_id, digest, definition: {source_run_id, from_seq,
+                                        to_seq, assertions, effect_policy}}]}
+                              # 某一版固化的定义：用例后来被改成什么样都不影响这里的内容
+PATCH /v1/cases/{id}       -> CaseItem   # 改用例定义（只改给出的字段）；已落库的结论一个字不动
 ```
 
 `label` 只描述这个条件**实际覆盖了**什么：没写模型就写「沿用用例自身模型」，不替它起一个
@@ -283,9 +302,60 @@ GET  /v1/suites/{id}       -> {id, status, total, completed, counts, errors,
 凭空补一个条件名会把一次真实覆盖描述成「什么都没变」）。
 
 **用例行的「最近一次结论」是整条写下去的。** 记录结论的那次写入，把 `last_status`、
-`last_run_id`、`last_run_at`、`last_results`、`last_cause`、`last_condition` 六个字段放进
-**同一条 UPDATE**；开始一次新执行的那次写入同样整条落下（它负责的是其中除了成因之外的五个）。
+`last_run_id`、`last_run_at`、`last_results`、`last_cause`、`last_condition`、
+`last_definition_digest`、`last_definition_overrides` 八个字段放进
+**同一条 UPDATE**；开始一次新执行的那次写入同样整条落下（它负责的是其中除了成因的那几个，
+定义摘要也在其中：那一次还没有结论，也就还没有「哪一版定义得出的结论」这句话）。
 谁最后提交，这一整条记录就整个来自谁。
+
+**`last_definition_digest` 记的是「有效定义」。** 用例行上那一份是**定义**（`definition_digest`）；
+一次执行真正按着跑的那一份是**有效定义** = 定义 ⊕ 这次执行**显式给出的回放覆盖**
+（`from_seq` / `preset` / `policy` / `model` / `system_prompt`，即
+`POST /v1/cases/{id}/run` 的请求体里真的写了的那些字段；批量格子由当列条件带下来）。
+覆盖同时结构化记在 `last_definition_overrides` 上（`null` = 那次执行没有覆盖）。
+
+两者必须分开，因为覆盖是真实存在的：**只记基础定义，会把一次「从第 1 步回放」的结论记成
+「第 15 步那一版定义」**——那是错误归属，也正是这一层存在的理由。由此：
+
+* 没有覆盖时两份摘要相同，因此默认路径下「最近一次结论所用的定义」与用例自己的定义
+  （同样也是用例集版本里那个成员摘要）可以直接比对；
+* **摘要说明「按什么判的」，覆盖说明「与用例定义差在哪」**。两份摘要相同，当且仅当**有效值**
+  相同（同一份判据）；因此「有覆盖」**不蕴含**「摘要不同」——覆盖成它本来就等于的值（例如把模型
+  覆盖成用例自己的模型）时两份摘要相同，反过来也不能拿「摘要相同」推断「没有覆盖过」，那次到底
+  给了什么由 `last_definition_overrides` 回答。控制台据此分两支说话——有覆盖时不会说「当前定义
+  已改动」（那句话没有记录支撑），只在摘要确实不同时才补一句「判据与当前定义不一致」。
+
+存量行这两列都是 `null`，也就是「没有记录」——控制台在 `null` 时什么都不说，不拿「没记录」
+冒充「一致」。「没有记录」与「那次执行没有覆盖」由 `last_definition_digest` 区分：它为
+`null` 就是没记录。
+
+**请求边界：给不出来的值不会被静默吞掉。** 这条纪律覆盖**每一个**接受执行前提的入口：
+创建 / 更新 / 运行用例、回放与它的预估、批量套件与它的预估。共用同一组约束：
+
+* `from_seq` 必须 `>= 1`，否则 **422**。步号是 1 起的；0 与负数从来不曾按调用方的意思执行过
+  （计划一直读作第 1 步），因此不允许它先被记下来、再被解释成别的东西。
+* **多给字段就是 422**（`extra="forbid"`）。拼错的键（例如 `fromSeq`）过去会被安静丢掉，
+  调用方拿到 200 却跑的不是自己说的那一次；更新路径上更糟——一次拼错的 PATCH 会变成
+  「什么都没改」的 200。
+* 空串等于**没给**：`model` / `system_prompt` 传 `""` 不覆盖任何东西（执行层一直是「有值才用」），
+  记录因此也不会写出一次没发生过的覆盖。
+* 老数据里认不出的取值（例如 `from_seq=0`、认不出的 preset 名）不迁移、不回填，读取与执行都按
+  **归一化之后的有效值**处理，因此记录与执行永远指向同一份判据。
+* **嵌套对象按同一个标准**：`budget` 少一个字母（`max_model_call`）以前会变成「不设上限」——调用方
+  想限制花费，结果拿到的是一个不设上限的批次；`policy` 拼错（`defualt`）以前会变成 `recorded`——
+  想放行真实副作用，实际什么都没变。两者现在都在 422 的范围内。
+
+**严格放在请求边界，不放在 SDK 模型上。** 请求侧的 `budget` / `policy` 用的是 `schemas.BudgetRequest`
+与 `PolicyRequest`（`ReplayBudget` / `EffectPolicy` 的严格子类），SDK 的原模型保持宽松。理由是硬的：
+那两个模型会被**从库里读出来**（`run_to_record`、`case_to_item`、`cases._policy`），历史行里只要有一个
+本版本不认识的键，`forbid` 就让那一行读不出来——与「历史数据必须仍能读出」直接冲突（实测：给
+`EffectPolicy` 加 forbid 之后，一条含未知键的存量用例从 200 变成校验失败）。协议模型
+`Event` / `RunRecord` 的 `extra="allow"` 也是**有意**留的，为的是线上协议的向前兼容；因此严格只加在
+HTTP 请求体这一侧，SDK 与读出边界的兼容一个字都没动。
+
+**预算不算覆盖。** 它约束的是「这次跑多少 / 跑没跑完」，不是判据是什么：因预算停下的那次
+结论已经由成因码 `budget_exceeded` 与回放 Run 上的记账如实表达，再把它塞进定义摘要，只会让
+同一个数字既表示判据、又表示额度。
 
 这不是实现细节，而是用例页那句「最近一次结论」的前提：一条用例在同一批里会被多个条件
 并发执行，每个格子都要写这一行。若按列合并（先读出行对象、改属性、只提交与读到的快照

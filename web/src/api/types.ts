@@ -267,6 +267,30 @@ export interface CaseItem {
   last_cause?: InconclusiveCause | null
   /** 最近一次执行用的条件；单条运行不携带条件时为 null。 */
   last_condition?: SuiteConditionInfo | null
+  /**
+   * 当前定义的摘要（判据相关的那一面，见服务端 case_versions.py）。
+   * 与套件版本里的成员摘要比对，就能回答「这条用例还是不是那一版」。
+   */
+  definition_digest: string
+  /**
+   * 最近一次执行**所用的那一版定义**的摘要。与 definition_digest 不同时，说明这条结论
+   * 是在另一版定义下得出的；版本化之前跑出来的结论没有这个记录，为 null。
+   *
+   * 记的是**有效定义**（用例定义 ⊕ 下面那份覆盖），因此它回答的是「这次结论按什么判的」，
+   * 而不是「用例行上写的是什么」。
+   */
+  last_definition_digest?: string | null
+  /**
+   * 那次执行显式给出的回放覆盖。空表示**没有覆盖**；存量行同时 last_definition_digest 也为
+   * null，那才是「没有记录」。摘要与本字段一起构成完整前提。
+   */
+  last_definition_overrides?: {
+    from_seq?: number | null
+    preset?: string | null
+    policy?: Record<string, unknown> | null
+    model?: string | null
+    system_prompt?: string | null
+  } | null
   created_at?: string | null
   source_run?: RunRecord | null
 }
@@ -315,6 +339,8 @@ export interface SuiteItem {
   id: string
   case_id: string
   case_name: string
+  /** 这一格归属的用例集版本（提交那一刻固化的定义标识）；历史格子为 null。 */
+  case_set_version?: string | null
   condition_key: string
   condition: SuiteConditionInfo
   status: SuiteItemStatus
@@ -368,7 +394,35 @@ export interface SuiteDetail {
   errors: number
   /** 整批的预算记账；没声明过整批上限时为 null（不设上限不等于「上限为 0」）。 */
   budget?: SuiteBudgetUsage | null
+  /** 这批跑的是哪一版用例集；版本化之前创建的批次为 null（无版本记录）。 */
+  case_set?: CaseSetRef | null
   groups: SuiteConditionGroup[]
+}
+
+/**
+ * 一批结果所属的用例集版本（提交那一刻固化的定义）。
+ *
+ * 标识是**内容决定的**：标识相同必然定义相同，因此「两个套件是不是同一版用例」由标识本身
+ * 回答。drift 只说「用例自本批之后被改过」，不改变本批任何一条结论的归属。
+ */
+export interface CaseSetRef {
+  id: string
+  canonicalization: string
+  case_count: number
+  /** 这版定义是否已固化在库里、可以按 id 反查。正常情况下恒为 true。 */
+  recorded: boolean
+  recorded_at?: string | null
+  /** 定义行缺失时无从判断，为 null。 */
+  drift?: CaseSetDrift | null
+}
+
+/** 本批提交之后，这一版里的用例还是不是当时那一份。 */
+export interface CaseSetDrift {
+  /** 定义已经变了的用例。changed + missing + unchanged 恒等于版本里的用例数。 */
+  changed: string[]
+  /** 行已经不在了的用例。找不到就说找不到，不假装它没变。 */
+  missing: string[]
+  unchanged: number
 }
 
 /** 整批的预估。cost_usd 为 null 就是「无法预估」：只要有一格给不出成本，整批就不报数字。 */
@@ -386,6 +440,8 @@ export interface SuiteSummary {
   created_at?: string | null
   finished_at?: string | null
   conditions: SuiteCondition[]
+  /** 这批是哪一版用例；历史批次为 null。 */
+  case_set_version?: string | null
   total: number
   completed: number
   counts: Record<string, number>
@@ -401,6 +457,27 @@ export interface SuiteSubmitResponse {
   status: string
   total: number
   conditions: SuiteCondition[]
+  /** 提交即刻定下的版本标识：归属不必等到批次跑完才知道。 */
+  case_set_version?: string | null
+}
+
+/** 一个用例集版本固化的定义（按标识反查当时那一份用例定义）。 */
+export interface CaseSetVersionResponse {
+  id: string
+  canonicalization: string
+  case_count: number
+  recorded_at?: string | null
+  cases: {
+    case_id: string
+    digest: string
+    definition: {
+      source_run_id: string
+      from_seq?: number | null
+      to_seq?: number | null
+      assertions: unknown[]
+      effect_policy: Record<string, unknown>
+    }
+  }[]
 }
 
 export interface AgentInfo {

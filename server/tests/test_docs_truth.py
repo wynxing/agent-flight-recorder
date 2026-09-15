@@ -23,6 +23,14 @@ STALE_CLAIMS = (
     "暂缓通用 TypeScript SDK、其他框架",
 )
 
+#: 用例集版本（issue #24）交付之后不再为真的说法。
+#: 旧的 §5.2 把「数据集版本管理」整体列为未交付，那会被读成「这批跑的是哪一版用例」也还没有——
+#: 这句话现在只对了一半（跨版本对比、迁移工具仍然没做，归属已经有了）。
+STALE_VERSION_CLAIMS = (
+    "LLM Judge 与数据集版本管理",
+    "不含 LLM Judge、数据集版本管理",
+)
+
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
@@ -67,3 +75,74 @@ def test_readme_still_points_at_the_full_boundary_section() -> None:
     readme = _read("README.md")
     assert "docs/architecture.md" in readme
     assert "框架适配的验证边界" in readme
+
+
+def test_docs_admit_the_case_set_version() -> None:
+    """用例集版本已交付：文档必须承认它，且不能再把「数据集版本管理」整体算作未交付。"""
+
+    for relative in ("README.md", "docs/PRD.md", "docs/architecture.md", "docs/protocol.md"):
+        assert "用例集版本" in _read(relative), f"{relative} 没有提到已交付的用例集版本"
+
+    for relative in ("README.md", "docs/PRD.md"):
+        text = _read(relative)
+        for stale in STALE_VERSION_CLAIMS:
+            assert stale not in text, f"{relative} 里仍留着已被推翻的说法：{stale}"
+
+
+def test_the_docs_keep_the_unbuilt_parts_of_versioning() -> None:
+    """「做了什么」必须与「没做什么」一起出现：边界被删掉比被写错更危险。
+
+    这三件事**没有**做：跨版本的对比视图、版本迁移 / 合并 / 分支、跨批次的趋势看板。
+    另外还有一条事实性边界必须留着——历史批次没有版本记录，而且不回填。
+    """
+
+    readme = _read("README.md")
+    architecture = _read("docs/architecture.md")
+
+    for surface in ("跨版本的对比视图", "版本迁移", "趋势看板"):
+        assert surface in readme, f"README 的边界一节没有说明「{surface}」没做"
+
+    # 「无版本记录」是历史批次的真实状态：它在 README 与架构文档里都要说清，
+    # 而且必须与「不回填」这条立场一起出现。
+    assert "无版本记录" in readme
+    assert "按当前用例反推" in readme
+    assert "无版本记录" in architecture
+    assert "按当前用例反推" in architecture
+
+
+def test_the_docs_state_the_effective_definition_rule() -> None:
+    """「最近一次结论所用的定义」包含执行覆盖：这条规则必须在文档里，且不许被简化掉。
+
+    只写 `last_definition_digest` 而不说它覆盖了单次运行的覆盖，读者会以为「摘要不同 = 定义被改了」——
+    那正是这一层要避免的错误归属（审核在真机上抓到过：实际从第 1 步回放，却记成第 15 步那一版）。
+    这三份文档各自承担不同读者：协议给实现者、架构给维护者、README 给使用者。
+    """
+
+    for relative in ("docs/protocol.md", "docs/architecture.md", "README.md"):
+        body = _read(relative)
+        assert "有效定义" in body, f"{relative} 没有说明「有效定义」这条规则"
+        assert "last_definition_overrides" in body, f"{relative} 没有给出覆盖那一列"
+
+    # 预算是**有意**不进定义的：这条边界也要留在文档里（否则下一个人会把它加回去）。
+    for relative in ("docs/protocol.md", "README.md"):
+        assert "预算" in _read(relative), f"{relative} 没有说明预算与定义的关系"
+
+
+def test_the_docs_do_not_claim_an_override_always_changes_the_digest() -> None:
+    """「有覆盖 ⇒ 摘要不同」是错的：覆盖成它本来就等于的值时，两份摘要相同。
+
+    审核指出这四处都这么写过。措辞上的错误不变量比不写更糟——读者会据此得出「摘要相同 ⇒ 没覆盖过」
+    这条不成立的推论。正确的说法是**双向**的：摘要相同当且仅当有效值相同。代码注释也在检查范围内，
+    因为它是那三份文档里那句话的出处。
+    """
+
+    for relative in (
+        "README.md",
+        "docs/protocol.md",
+        "docs/architecture.md",
+        "server/afr_server/case_versions.py",
+    ):
+        body = _read(relative)
+        assert "有覆盖时必然不同" not in body, f"{relative} 里仍留着被推翻的说法"
+        assert "有覆盖时两份摘要必然不同" not in body, f"{relative} 里仍留着被推翻的说法"
+        assert "有效值" in body, f"{relative} 没有说明「有效值相同则摘要相同」"

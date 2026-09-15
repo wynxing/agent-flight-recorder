@@ -83,10 +83,13 @@ def _install_plain_runner(
     monkeypatch: pytest.MonkeyPatch,
     plan: Callable[[str, dict], tuple] | None = None,
 ) -> list[dict[str, Any]]:
-    """**不带**批量参数的假执行器：签名与加整批预算之前逐字一致。
+    """**不带整批账本参数**的假执行器：没有声明预算时那条路径不会多传账本。
 
-    用它跑一遍没有声明预算的批次，等于证明那条路径没有多传任何东西：多传了这里会
-    TypeError，格子会落到 error，测试立刻变红。
+    用它跑一遍没有声明预算的批次，等于证明那条路径没有多传 `budget` / `shared_ledger`：
+    多传了这里会 TypeError，格子会落到 error，测试立刻变红。
+
+    它**会**收到 `definition`：用例集版本化之后，批次路径上每一格都带着提交那一刻冻结的
+    定义（见 case_versions.py）。那是版本化的正常输入，不是「没声明预算却多传账本」。
     """
 
     calls: list[dict[str, Any]] = []
@@ -94,6 +97,7 @@ def _install_plain_runner(
     def runner(
         case_id: str,
         *,
+        definition: dict[str, Any] | None = None,
         preset: Any = None,
         model: str | None = None,
         system_prompt: str | None = None,
@@ -135,6 +139,7 @@ def _install_spending_runner(
     def runner(
         case_id: str,
         *,
+        definition: dict[str, Any] | None = None,
         preset: Any = None,
         model: str | None = None,
         system_prompt: str | None = None,
@@ -283,7 +288,9 @@ def test_without_a_batch_budget_the_suite_behaves_exactly_as_before(
     assert group["determinable_rate"] == 1.0
 
     # 差集就是全部的新增：没有第二个记账对象，也没有第二个计数。
-    assert set(body) - _OLD_SUITE_KEYS == {"budget"}
+    # case_set 是用例集版本（issue #24）加的：它**与预算无关**，不声明上限的批次同样带着
+    # 「这批跑的是哪一版用例」——版本不是预算的附属能力，所以这里它照样在差集里。
+    assert set(body) - _OLD_SUITE_KEYS == {"budget", "case_set"}
     assert set(body["counts"]) - {
         "passed",
         "failed",
@@ -293,7 +300,8 @@ def test_without_a_batch_budget_the_suite_behaves_exactly_as_before(
         "running",
     } == {NOT_STARTED}
     assert set(group) - _OLD_GROUP_KEYS == {"not_started"}
-    assert set(group["items"][0]) - _OLD_ITEM_KEYS == set()
+    # 格子的新增只有版本归属：它才是被执行的单位，「我跑的是哪一版」不该靠反查套件才知道。
+    assert set(group["items"][0]) - _OLD_ITEM_KEYS == {"case_set_version"}
     # 批次层依然只有计数，没有任何跨条件的比率或分数（issue #10 的契约不变）。
     assert {
         key

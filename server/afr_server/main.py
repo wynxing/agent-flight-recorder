@@ -30,7 +30,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import background
 from .agents import describe_agents, load_agent_specs
-from .cases import create_case, snapshot_of, submit_case_run
+from .case_versions import case_set_version_payload
+from .cases import create_case, submit_case_run, update_case
 from .config import get_settings
 from .db import init_db, session_scope
 from .diff import diff_runs
@@ -42,6 +43,8 @@ from .schemas import (
     CaseListResponse,
     CaseRunRequest,
     CaseRunResponse,
+    CaseSetVersionResponse,
+    CaseUpdateRequest,
     ReplayEstimateResponse,
     ReplayRequest,
     ReplayResponse,
@@ -473,6 +476,44 @@ def run_case(case_id: str, payload: CaseRunRequest) -> CaseRunResponse:
     return CaseRunResponse(case_id=case_id, run_id=run_id)
 
 
+@app.patch("/v1/cases/{case_id}", response_model=CaseItem)
+def update_case_endpoint(case_id: str, payload: CaseUpdateRequest) -> CaseItem:
+    """改一条用例的定义：断言、起点、来源运行、副作用策略与其覆盖。
+
+    `exclude_unset` 是关键：只有请求里**真的出现过**的字段会被改写，因此
+    「把 model 改回 None」与「不动 model」是两件不同的事，不会互相冒充。
+    改的是定义；已经落库的结论一个字都不动——它们的归属由当时的定义决定
+    （见 docs/protocol.md 第 7 节与 case_versions.py）。
+    """
+
+    patch = payload.model_dump(exclude_unset=True)
+    with session_scope() as session:
+        try:
+            row = update_case(session, case_id, patch=patch)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return case_to_item(row, _source_run(session, row))
+
+
+# ------------------------------------------------------------------ 用例集版本
+
+
+@app.get("/v1/case-set-versions/{version_id}", response_model=CaseSetVersionResponse)
+def read_case_set_version(version_id: str) -> CaseSetVersionResponse:
+    """按标识取回一个用例集版本固化的定义。
+
+    这是「旧套件还查得到当时的定义」那条路径：套件与格子只挂标识，定义在版本行里，
+    因此用例后来被改成什么样，都不影响这里返回的内容。
+    """
+
+    with session_scope() as session:
+        body = case_set_version_payload(session, version_id)
+    if body is None:
+        # 找不到就说找不到。绝不拿当前用例凑一份「看起来像当时」的定义出来。
+        raise HTTPException(status_code=404, detail=f"case set version not found: {version_id}")
+    return CaseSetVersionResponse(**body)
+
+
 # ------------------------------------------------------------------ 批量套件
 
 
@@ -500,6 +541,8 @@ def submit_suite_endpoint(payload: SuiteSubmitRequest) -> SuiteSubmitResponse:
         status=str(body.get("status", "running")),
         total=int(body.get("total", 0)),
         conditions=payload.conditions,
+        # 归属在提交那一刻就已确定（版本由提交时的定义算出），因此立刻就能返回。
+        case_set_version=(body.get("case_set") or {}).get("id"),
     )
 
 

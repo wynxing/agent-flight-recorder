@@ -30,11 +30,15 @@ import { useSessionStore } from '@/stores/session'
 import { ASSERTION_LABELS, causeInfo, causeOf, relativeTime, shortId, truncate } from '@/utils/format'
 import {
   batchLifecycleLabel,
+  caseSetDriftNotice,
+  caseSetLabel,
   causeDrillLabel,
   conditionLabel,
   conditionVerdict,
+  definitionDriftNotice,
   determinableRateText,
   notStartedLabel,
+  shortVersion,
 } from '@/utils/suite'
 
 const route = useRoute()
@@ -626,6 +630,18 @@ onUnmounted(() => {
             <span class="sep">/</span>{{ relativeTime(suite.finished_at) }}结束
           </template>
         </p>
+        <!--
+          这批跑的是哪一版用例集：提交那一刻固化的定义，标识由内容决定，可以按它反查。
+          版本化之前建的批次没有版本记录，这里如实这么说，不按当前用例反推一个版本号。
+          用例后来被改过时，提示必须同时说清「归属没变」——这一批每一格跑的都是当时那一份。
+        -->
+        <p class="case-set-line">
+          {{ caseSetLabel(suite.case_set) }}
+          <template v-if="caseSetDriftNotice(suite.case_set)">
+            <span class="sep">/</span>
+            <span class="drift">{{ caseSetDriftNotice(suite.case_set) }}</span>
+          </template>
+        </p>
         <!-- 整批的预算记账：已用 / 上限 / 是否触顶。没声明过整批上限时整块不出现。 -->
         <p v-if="suite.budget" class="budget-line">
           整批预算上限 {{ batchLimitText(suite.budget) }}
@@ -758,10 +774,24 @@ onUnmounted(() => {
             <!-- 结论必须带着前提：没有它，就无法分辨这次结论属于哪个 Prompt 版本。 -->
             <span v-if="item.last_condition" class="sep">/</span>
             <span v-if="item.last_condition">最近一次条件：{{ conditionText(item.last_condition) }}</span>
+            <!-- 当前定义的摘要：改过之后它会变，因此这就是「还是不是那一版」的判据。 -->
+            <template v-if="item.definition_digest">
+              <span class="sep">/</span>
+              <span :title="item.definition_digest">定义 {{ shortVersion(item.definition_digest) }}</span>
+            </template>
           </p>
         </header>
 
         <CausePanel v-if="causeOfCase(item)" :cause="causeOfCase(item)" title="无法判断" compact />
+
+        <!--
+          最近一次结论不是在当前这份定义下得出的：必须说出来。否则那句「最近一次结论」
+          看起来像是在描述现在这份定义，而它其实属于另一版——正是本页最要避免的那种误导。
+          没有记录过（版本化之前跑的）时这里什么都不说：拿「没记录」冒充「一致」更糟。
+        -->
+        <p v-if="definitionDriftNotice(item)" class="definition-drift">
+          {{ definitionDriftNotice(item) }}
+        </p>
 
         <div class="body">
           <div class="assertions">
@@ -968,6 +998,15 @@ onUnmounted(() => {
 .has-errors {
   color: var(--danger);
 }
+/* 用例集版本与它的漂移提示：归属是一句陈述，被改动是一个提示，两者不共用一个颜色。 */
+.case-set-line {
+  margin-top: 5px;
+  font-size: var(--step-1);
+  color: var(--text-muted);
+}
+.case-set-line .drift {
+  color: var(--warning);
+}
 .groups {
   list-style: none;
   margin: 12px 0 0;
@@ -1161,6 +1200,16 @@ onUnmounted(() => {
   margin-top: 5px;
   font-size: var(--step-1);
   color: var(--text-muted);
+}
+/* 最近一次结论不是当前这份定义跑出来的：用提示色说清，别让它埋在那行灰字里。 */
+.definition-drift {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--warning-dim);
+  border-radius: var(--radius-chip);
+  background: var(--warning-dim);
+  font-size: var(--step-1);
+  color: var(--text);
 }
 .sep {
   margin: 0 7px;

@@ -15,12 +15,41 @@ from agent_flight_recorder.models import (
 )
 from agent_flight_recorder.replay.reasons import InconclusiveReason
 from agent_flight_recorder.replay.budget import BudgetUsage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .assertions import AssertionResult, AssertionSpec
+from .case_versions import CANONICALIZATION, definition_digest_of_case
 from .diff import RunDiff
 from .storage import aware_utc
 from .tables import CaseTable
+
+
+class BudgetRequest(ReplayBudget):
+    """请求边界上的预算：多给一个字段就是 422。
+
+    为什么**不**直接给 SDK 的 `ReplayBudget` 加 `extra="forbid"`（这是本轮的选择，理由要留住）：
+
+    * SDK 的 `EffectPolicy` / `ReplayBudget` 是**公开导出**（`agent_flight_recorder.__all__`），收口
+      等于给所有使用者来一次破坏性变更；
+    * 更要紧的是它们的**读取路径**：`storage.run_to_record`、`case_to_item`、`cases._policy` 都会从
+      库里 `model_validate` 存下来的策略。历史行里只要有一个本版本不认识的键（未来版本写的、手工改
+      的），`forbid` 就会让那一行**读不出来**（500）——那正是「历史数据必须仍能读出」的反面。
+      实测：给 `EffectPolicy` 加 forbid 之后，一条含未知键的存量用例从 200 变成 ValidationError。
+    * 因此严格只放在**不可信的入口**：HTTP 请求体。SDK 模型（含协议模型刻意的 `extra="allow"`）
+      继续宽松，读出边界的兼容一个字没动。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PolicyRequest(EffectPolicy):
+    """请求边界上的策略：同上，多给一个字段就是 422。
+
+    `policy={"defualt": "live"}` 以前会被静默丢掉，跑出来的是 `recorded`——调用方以为放行了
+    真实副作用，实际什么都没变。这条路径（创建 / 更新用例、回放）现在被契约挡住。
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class RunListItem(BaseModel):
@@ -53,11 +82,20 @@ class TimelineResponse(BaseModel):
 
 
 class ReplayRequest(BaseModel):
+    """一次回放的请求（也用于它的预估端点）。
+
+    多给字段就是 422，与三个用例请求同一套纪律。审核实测 `{from_seq: 1, systemPrompt:
+    "caller-intended"}` 返回 200，而捕获到的计划里 system_prompt 是 null——调用方想改 Prompt，
+    服务端按默认 Prompt 计划，且没有任何错误。嵌套的预算 / 策略同理（见 BudgetRequest / PolicyRequest）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     from_seq: int = Field(ge=1)
     preset: ReplayPreset | None = None
-    policy: EffectPolicy | None = None
+    policy: PolicyRequest | None = None
     #: 硬上限（最大成本 / 最大模型调用次数）。两个都不给就是不设上限。
-    budget: ReplayBudget | None = None
+    budget: BudgetRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
@@ -83,15 +121,21 @@ class ReplayResponse(BaseModel):
 
 
 class CaseCreateRequest(BaseModel):
+    #: 多给字段就是错：静默丢掉一个拼错的键，等于让这次提交**不是调用方要的那一次**，
+    #: 而调用方从 200 里看不出来（审核实测：`{"fromSeq": 2}` 被丢掉，实际没覆盖）。
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     description: str = ""
     source_run_id: str
-    from_seq: int | None = None
+    #: 步号是 1 起的。0 / 负数没有意义，也从来不曾按调用方的意思执行过（计划一直读作 1），
+    #: 因此边界直接拒掉，而不是让「记 0、跑 1」这种错位有机会产生。
+    from_seq: int | None = Field(default=None, ge=1)
     to_seq: int | None = None
     assertions: list[AssertionSpec] = Field(default_factory=list)
     labels: dict[str, str] = Field(default_factory=dict)
     preset: ReplayPreset | None = None
-    policy: EffectPolicy | None = None
+    policy: PolicyRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
 
@@ -118,6 +162,18 @@ class CaseItem(BaseModel):
     last_cause: InconclusiveReason | None = None
     #: 最近一次执行用的条件（Prompt 版本 / 模型）；单条运行不携带条件时为 None。
     last_condition: dict[str, Any] | None = None
+    #: **当前**定义的摘要（判据相关那一面，见 case_versions.py）。它与套件版本里的成员
+    #: 摘要比对，就能回答「这条用例是不是还是那一版」——不需要自己去逐字段 diff。
+    definition_digest: str = ""
+    #: 最近一次执行**所用的那一版定义**的摘要。与 definition_digest 不同时，说明这条结论
+    #: 是在另一版定义下得出的；存量行（版本化之前跑的）没有它，如实为 None 而不是回填一个。
+    #: 这里记的是**有效定义**：用例定义 ⊕ 那次执行显式给出的覆盖（见 case_versions.py）。
+    last_definition_digest: str | None = None
+    #: 那次执行显式给出的回放覆盖（from_seq / preset / policy / model / system_prompt）。
+    #: 空表示**没有覆盖**（那一次就是按用例自己的定义跑的），因此它与 last_definition_digest
+    #: 一起才构成完整的前提：摘要说「按什么判的」，这一列说「与用例定义差在哪」。
+    #: 存量行（没有记录）与「没有覆盖」的区分靠 last_definition_digest：它为 None 就是没记录。
+    last_definition_overrides: dict[str, Any] | None = None
     created_at: datetime | None = None
     source_run: RunRecord | None = None
 
@@ -127,10 +183,13 @@ class CaseListResponse(BaseModel):
 
 
 class CaseRunRequest(BaseModel):
-    from_seq: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    #: 同上：`< 1` 当场 422。与 `ReplayRequest.from_seq`（一直有 `ge=1`）保持一致。
+    from_seq: int | None = Field(default=None, ge=1)
     preset: ReplayPreset | None = None
     #: 这一次执行的硬上限。不给就是不设上限（行为与之前一致）。
-    budget: ReplayBudget | None = None
+    budget: BudgetRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
 
@@ -141,14 +200,46 @@ class CaseRunResponse(BaseModel):
     status: str = "running"
 
 
+class CaseUpdateRequest(BaseModel):
+    """用例定义的局部更新：**只改给出的字段**，没给的保持原样。
+
+    这组字段就是用例的定义本身（断言、起点、来源运行、副作用策略与其覆盖）。它刻意不含
+    `last_*` 这类执行记账：那些字段属于「跑出来的结果」，不该被外部改写。
+    """
+
+    #: 与创建/运行一致：多给字段 = 422。否则一个拼错的键会让这次 PATCH 变成**什么都没改**的
+    #: 200——调用方以为改了，实际一行都没动。
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+    source_run_id: str | None = None
+    from_seq: int | None = Field(default=None, ge=1)
+    to_seq: int | None = None
+    assertions: list[AssertionSpec] | None = None
+    labels: dict[str, str] | None = None
+    preset: ReplayPreset | None = None
+    policy: PolicyRequest | None = None
+    model: str | None = None
+    system_prompt: str | None = None
+
+
 class SuiteCondition(BaseModel):
     """矩阵的一列：Prompt 版本与模型。None 表示沿用用例自身的设定。"""
+
+    #: 条件里的字段拼错会被静默丢掉：`{modle: "x"}` 以前返回 200，而响应里的条件是
+    #: `prompt=null, model=null`——整列变成「沿用用例自身」，调用方以为在验证新模型。
+    model_config = ConfigDict(extra="forbid")
 
     prompt: str | None = None
     model: str | None = None
 
 
 class SuiteSubmitRequest(BaseModel):
+    #: 与单次回放、用例请求同一套纪律：多给字段 = 422。这条路径同样会静默降级——
+    #: 「缺 case_ids 会 400」覆盖不了「case_ids 有效、但 conditions 里的字段拼错」。
+    model_config = ConfigDict(extra="forbid")
+
     case_ids: list[str] = Field(default_factory=list)
     #: 一键全选。与 case_ids 互斥，二者都不给则请求不成立。
     all_cases: bool = False
@@ -156,7 +247,7 @@ class SuiteSubmitRequest(BaseModel):
     conditions: list[SuiteCondition] = Field(default_factory=lambda: [SuiteCondition()])
     #: **整批**的硬上限（最大成本 / 最大模型调用次数），与单次回放同一套语义。
     #: 两个维度都不给 = 不设上限：此时套件行为与没有这套能力时逐字一致。
-    budget: ReplayBudget | None = None
+    budget: BudgetRequest | None = None
 
 
 class SuiteSubmitResponse(BaseModel):
@@ -164,6 +255,8 @@ class SuiteSubmitResponse(BaseModel):
     status: str = "running"
     total: int
     conditions: list[SuiteCondition] = Field(default_factory=list)
+    #: 提交即刻就定下来的版本标识：请求返回时归属已经确定，不必等到批次跑完。
+    case_set_version: str | None = None
 
 
 class SuiteItem(BaseModel):
@@ -172,6 +265,8 @@ class SuiteItem(BaseModel):
     id: str
     case_id: str
     case_name: str
+    #: 这一格归属的用例集版本（提交那一刻固化的定义标识）。历史格子没有它，为 None。
+    case_set_version: str | None = None
     condition_key: str
     condition: dict[str, Any] = Field(default_factory=dict)
     status: str
@@ -224,6 +319,66 @@ class SuiteConditionGroup(BaseModel):
     items: list[SuiteItem] = Field(default_factory=list)
 
 
+class CaseSetDrift(BaseModel):
+    """本批提交之后，这一版用例集里的用例还是不是当时那一份。
+
+    它只影响提示，不影响归属：这一批的每一条结论都跑在提交那一刻冻结的定义上，用例后来被
+    改成什么样，都不会把已经跑出来的结论改写成另一个定义下的结果。
+    """
+
+    #: 定义已经变了的用例。changed + missing + unchanged 恒等于版本里的用例数。
+    changed: list[str] = Field(default_factory=list)
+    #: 行已经不在了的用例（换库、手工清理）。找不到了就说找不到了，不假装它没变。
+    missing: list[str] = Field(default_factory=list)
+    unchanged: int = 0
+
+
+class CaseSetRef(BaseModel):
+    """一批结果所属的用例集版本（提交那一刻固化的定义）。"""
+
+    id: str
+    canonicalization: str = CANONICALIZATION
+    case_count: int = 0
+    #: 这版定义是否已固化在库里、可以按 id 反查。正常情况下恒为 True；定义行缺失时如实为
+    #: False——那时既不能说「无版本记录」（标识明明在），也不能说定义还在。
+    recorded: bool = True
+    recorded_at: datetime | None = None
+    #: 用例自本批之后有没有被改过。定义行缺失时为 None（无从判断）。
+    drift: CaseSetDrift | None = None
+
+
+class CaseDefinition(BaseModel):
+    """一条用例里**判据相关**的那一面：能改变结论的字段（见 case_versions.py）。
+
+    展示用的名字、描述与筛选用的 labels 都不在这里：它们改不出任何一条不同的结论。
+    """
+
+    source_run_id: str
+    from_seq: int | None = None
+    to_seq: int | None = None
+    #: 固化时的断言（写入时已按 AssertionSpec 归一化）。用 Any 是因为摘要不该对存量数据的
+    #: 形状提要求：认不出的旧断言照原样返回，也不该让一次读取失败。
+    assertions: list[Any] = Field(default_factory=list)
+    effect_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaseSetVersionMember(BaseModel):
+    case_id: str
+    #: 这条用例在这一版里的定义摘要（cs1m:<hex>）。
+    digest: str
+    definition: CaseDefinition
+
+
+class CaseSetVersionResponse(BaseModel):
+    """按标识取回当时固化的用例定义（旧套件的可反查路径）。"""
+
+    id: str
+    canonicalization: str = CANONICALIZATION
+    case_count: int = 0
+    recorded_at: datetime | None = None
+    cases: list[CaseSetVersionMember] = Field(default_factory=list)
+
+
 class SuiteDetailResponse(BaseModel):
     id: str
     status: str
@@ -238,6 +393,8 @@ class SuiteDetailResponse(BaseModel):
     #: 整批的预算记账。没声明过整批上限时是 None：不设上限不等于「上限为 0」，
     #: 也不该凭空多出一个「上限：无」的账目。
     budget: SuiteBudgetUsage | None = None
+    #: 这批跑的是哪一版用例集。版本化之前创建的批次为 None（无版本记录，不伪造回填）。
+    case_set: CaseSetRef | None = None
     groups: list[SuiteConditionGroup] = Field(default_factory=list)
 
 
@@ -261,6 +418,8 @@ class SuiteSummary(BaseModel):
     created_at: datetime | None = None
     finished_at: datetime | None = None
     conditions: list[dict[str, Any]] = Field(default_factory=list)
+    #: 这批是哪一版用例。列表里就要能看出来：跨批次的比较建立在这个归属上。
+    case_set_version: str | None = None
     total: int
     completed: int
     counts: dict[str, int] = Field(default_factory=dict)
@@ -311,6 +470,16 @@ def case_to_item(row: CaseTable, source_run: RunRecord | None = None) -> CaseIte
         last_condition=(
             dict(row.last_condition) if getattr(row, "last_condition", None) else None
         ),
+        # 当前定义的摘要：由这一行的内容算出来（纯函数），因此它永远与页面上看到的定义一致。
+        definition_digest=definition_digest_of_case(row),
+        # 最近一次结论是在哪一版定义下得出的。存量行没有这一列，如实是 None。
+        last_definition_digest=getattr(row, "last_definition_digest", None),
+        # 那次执行显式给出的覆盖（没有覆盖、或没有记录时都是 None，两者的区分见上）。
+        last_definition_overrides=(
+            dict(row.last_definition_overrides)
+            if getattr(row, "last_definition_overrides", None)
+            else None
+        ),
         created_at=aware_utc(row.created_at),
         source_run=source_run,
     )
@@ -348,10 +517,16 @@ def replay_meta_to_dict(meta: dict[str, Any] | None) -> dict[str, Any] | None:
 __all__ = [
     "AgentInfo",
     "CaseCreateRequest",
+    "CaseDefinition",
     "CaseItem",
     "CaseListResponse",
     "CaseRunRequest",
     "CaseRunResponse",
+    "CaseSetDrift",
+    "CaseSetRef",
+    "CaseSetVersionMember",
+    "CaseSetVersionResponse",
+    "CaseUpdateRequest",
     "ReplayEstimateResponse",
     "ReplayRequest",
     "ReplayResponse",

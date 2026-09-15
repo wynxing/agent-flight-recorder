@@ -47,9 +47,21 @@ def init_db() -> None:
 #: 新增可空列。仓库刻意不引入迁移框架（SQLite 单文件、本地单用户），
 #: 因此这里只做最小、可重入的补齐：create_all 不会给已存在的表加列。
 _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
-    "cases": {"last_cause": "JSON", "last_condition": "JSON"},
+    # 用例「最近一次结论」的定义前提：结论是在哪一版定义下得出的。
+    "cases": {
+        "last_cause": "JSON",
+        "last_condition": "JSON",
+        "last_definition_digest": "TEXT",
+        # 单次运行显式给出的回放覆盖（见 cases.run_overrides）。存量行没有它，读出来是
+        # 「那次执行没有覆盖记录」——与「没有覆盖」在 API 上由摘要那一列一起区分（见 protocol）。
+        "last_definition_overrides": "JSON",
+    },
     # 整批预算：声明的上限与整批的记账都是后加的字段，旧库要能直接补上。
-    "suites": {"budget": "JSON", "budget_usage": "JSON"},
+    # case_set_version 同理：套件所属的用例集版本（见 case_versions.py）。补出来的列在
+    # 存量行上是 NULL，读出来就是「无版本记录」——版本化之前建的批次确实没有版本。
+    "suites": {"budget": "JSON", "budget_usage": "JSON", "case_set_version": "TEXT"},
+    # 格子同样要能说清自己归属哪一版（格子才是被执行的那个单位）。
+    "suite_items": {"case_set_version": "TEXT"},
 }
 
 

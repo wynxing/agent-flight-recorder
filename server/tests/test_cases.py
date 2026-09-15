@@ -308,7 +308,12 @@ def test_a_cases_record_is_committed_as_a_whole_not_column_by_column(client, mak
     ).json()["id"]
 
     # 格子 B 的准备阶段：这一行于是带着 B 的 run_id、且还没有结论。
-    run_b, _, _ = cases._prepare_case_run(case_id, from_seq=1, preset=ReplayPreset.REGRESS)
+    # 返回的第四项是这次执行显式给出的覆盖（issue #24 的「有效定义」）：预设就是覆盖的一种，
+    # 因此这里必须真的传下去了——否则「最近一次结论按什么判的」会漏掉它。
+    run_b, _, _, overrides_b = cases._prepare_case_run(
+        case_id, from_seq=1, preset=ReplayPreset.REGRESS
+    )
+    assert overrides_b == {"from_seq": 1, "preset": "regress"}
 
     # B 在自己的会话里读这一行——并发时，这就是「读在对方写之前」。
     session_b = Session(get_engine(), expire_on_commit=False)
@@ -318,7 +323,7 @@ def test_a_cases_record_is_committed_as_a_whole_not_column_by_column(client, mak
     session_b.commit()  # 结束这次读，但保留已经读到的那份快照
 
     # 格子 A 先跑完，把它那一次执行整条写下去。
-    run_a, _, _ = cases._prepare_case_run(case_id, from_seq=1, preset=ReplayPreset.REPRODUCE)
+    run_a, _, _, _ = cases._prepare_case_run(case_id, from_seq=1, preset=ReplayPreset.REPRODUCE)
     cases._store(case_id, run_a, "failed", [], None, {"prompt": "default"})
 
     # 格子 B 随后用自己那份快照提交自己的结论。
