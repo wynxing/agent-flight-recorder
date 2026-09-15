@@ -24,6 +24,34 @@ from .storage import aware_utc
 from .tables import CaseTable
 
 
+class BudgetRequest(ReplayBudget):
+    """请求边界上的预算：多给一个字段就是 422。
+
+    为什么**不**直接给 SDK 的 `ReplayBudget` 加 `extra="forbid"`（这是本轮的选择，理由要留住）：
+
+    * SDK 的 `EffectPolicy` / `ReplayBudget` 是**公开导出**（`agent_flight_recorder.__all__`），收口
+      等于给所有使用者来一次破坏性变更；
+    * 更要紧的是它们的**读取路径**：`storage.run_to_record`、`case_to_item`、`cases._policy` 都会从
+      库里 `model_validate` 存下来的策略。历史行里只要有一个本版本不认识的键（未来版本写的、手工改
+      的），`forbid` 就会让那一行**读不出来**（500）——那正是「历史数据必须仍能读出」的反面。
+      实测：给 `EffectPolicy` 加 forbid 之后，一条含未知键的存量用例从 200 变成 ValidationError。
+    * 因此严格只放在**不可信的入口**：HTTP 请求体。SDK 模型（含协议模型刻意的 `extra="allow"`）
+      继续宽松，读出边界的兼容一个字没动。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PolicyRequest(EffectPolicy):
+    """请求边界上的策略：同上，多给一个字段就是 422。
+
+    `policy={"defualt": "live"}` 以前会被静默丢掉，跑出来的是 `recorded`——调用方以为放行了
+    真实副作用，实际什么都没变。这条路径（创建 / 更新用例、回放）现在被契约挡住。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class RunListItem(BaseModel):
     run: RunRecord
     summary: RunSummary
@@ -54,11 +82,20 @@ class TimelineResponse(BaseModel):
 
 
 class ReplayRequest(BaseModel):
+    """一次回放的请求（也用于它的预估端点）。
+
+    多给字段就是 422，与三个用例请求同一套纪律。审核实测 `{from_seq: 1, systemPrompt:
+    "caller-intended"}` 返回 200，而捕获到的计划里 system_prompt 是 null——调用方想改 Prompt，
+    服务端按默认 Prompt 计划，且没有任何错误。嵌套的预算 / 策略同理（见 BudgetRequest / PolicyRequest）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     from_seq: int = Field(ge=1)
     preset: ReplayPreset | None = None
-    policy: EffectPolicy | None = None
+    policy: PolicyRequest | None = None
     #: 硬上限（最大成本 / 最大模型调用次数）。两个都不给就是不设上限。
-    budget: ReplayBudget | None = None
+    budget: BudgetRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
@@ -98,7 +135,7 @@ class CaseCreateRequest(BaseModel):
     assertions: list[AssertionSpec] = Field(default_factory=list)
     labels: dict[str, str] = Field(default_factory=dict)
     preset: ReplayPreset | None = None
-    policy: EffectPolicy | None = None
+    policy: PolicyRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
 
@@ -152,7 +189,7 @@ class CaseRunRequest(BaseModel):
     from_seq: int | None = Field(default=None, ge=1)
     preset: ReplayPreset | None = None
     #: 这一次执行的硬上限。不给就是不设上限（行为与之前一致）。
-    budget: ReplayBudget | None = None
+    budget: BudgetRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
 
@@ -182,7 +219,7 @@ class CaseUpdateRequest(BaseModel):
     assertions: list[AssertionSpec] | None = None
     labels: dict[str, str] | None = None
     preset: ReplayPreset | None = None
-    policy: EffectPolicy | None = None
+    policy: PolicyRequest | None = None
     model: str | None = None
     system_prompt: str | None = None
 
@@ -190,11 +227,19 @@ class CaseUpdateRequest(BaseModel):
 class SuiteCondition(BaseModel):
     """矩阵的一列：Prompt 版本与模型。None 表示沿用用例自身的设定。"""
 
+    #: 条件里的字段拼错会被静默丢掉：`{modle: "x"}` 以前返回 200，而响应里的条件是
+    #: `prompt=null, model=null`——整列变成「沿用用例自身」，调用方以为在验证新模型。
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str | None = None
     model: str | None = None
 
 
 class SuiteSubmitRequest(BaseModel):
+    #: 与单次回放、用例请求同一套纪律：多给字段 = 422。这条路径同样会静默降级——
+    #: 「缺 case_ids 会 400」覆盖不了「case_ids 有效、但 conditions 里的字段拼错」。
+    model_config = ConfigDict(extra="forbid")
+
     case_ids: list[str] = Field(default_factory=list)
     #: 一键全选。与 case_ids 互斥，二者都不给则请求不成立。
     all_cases: bool = False
@@ -202,7 +247,7 @@ class SuiteSubmitRequest(BaseModel):
     conditions: list[SuiteCondition] = Field(default_factory=lambda: [SuiteCondition()])
     #: **整批**的硬上限（最大成本 / 最大模型调用次数），与单次回放同一套语义。
     #: 两个维度都不给 = 不设上限：此时套件行为与没有这套能力时逐字一致。
-    budget: ReplayBudget | None = None
+    budget: BudgetRequest | None = None
 
 
 class SuiteSubmitResponse(BaseModel):
