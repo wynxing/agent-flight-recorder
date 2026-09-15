@@ -126,3 +126,23 @@ def test_the_docs_state_the_effective_definition_rule() -> None:
     # 预算是**有意**不进定义的：这条边界也要留在文档里（否则下一个人会把它加回去）。
     for relative in ("docs/protocol.md", "README.md"):
         assert "预算" in _read(relative), f"{relative} 没有说明预算与定义的关系"
+
+
+def test_the_docs_do_not_claim_an_override_always_changes_the_digest() -> None:
+    """「有覆盖 ⇒ 摘要不同」是错的：覆盖成它本来就等于的值时，两份摘要相同。
+
+    审核指出这四处都这么写过。措辞上的错误不变量比不写更糟——读者会据此得出「摘要相同 ⇒ 没覆盖过」
+    这条不成立的推论。正确的说法是**双向**的：摘要相同当且仅当有效值相同。代码注释也在检查范围内，
+    因为它是那三份文档里那句话的出处。
+    """
+
+    for relative in (
+        "README.md",
+        "docs/protocol.md",
+        "docs/architecture.md",
+        "server/afr_server/case_versions.py",
+    ):
+        body = _read(relative)
+        assert "有覆盖时必然不同" not in body, f"{relative} 里仍留着被推翻的说法"
+        assert "有覆盖时两份摘要必然不同" not in body, f"{relative} 里仍留着被推翻的说法"
+        assert "有效值" in body, f"{relative} 没有说明「有效值相同则摘要相同」"

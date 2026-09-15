@@ -955,6 +955,209 @@ def test_a_started_run_does_not_keep_the_previous_premise(
 
 
 # ------------------------------------------------------------------ 存量数据
+# ------------------------------------------------------------------ 同类检查：取值必须真的生效
+
+
+def test_a_legacy_case_with_a_zero_start_records_what_it_runs(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """老库里存着 from_seq=0：记录必须写**实际会用的第 1 步**，而不是行里的 0。
+
+    边界现在挡住新的 <1，但老库里的 0 改不了（不迁移、不回填）。此时「计划从第 1 步跑、摘要说第 0
+    步」就是一条错位的 provenance——归一化把两头对齐到同一个值，并且让「行为相同的两份定义」落到
+    同一个摘要上（从第 0 步与从第 1 步开始，回放的是同一批步骤）。
+    """
+
+    from afr_server.db import session_scope
+    from afr_server.tables import CaseTable
+
+    client.post("/v1/ingest", json=make_run())
+    with session_scope() as session:
+        for case_id, from_seq in (("legacy-zero", 0), ("legacy-one", 1)):
+            session.add(
+                CaseTable(
+                    id=case_id,
+                    name=f"起点 {from_seq}",
+                    source_run_id="run-1",
+                    from_seq=from_seq,
+                    assertions=[{"type": "no_error"}],
+                    labels={},
+                    effect_policy={"preset": None, "policy": None, "model": None, "system_prompt": None},
+                )
+            )
+
+    zero = client.get("/v1/cases/legacy-zero").json()
+    one = client.get("/v1/cases/legacy-one").json()
+    # 0 与 1 是**同一份判据**（回放同一批步骤），因此是同一个定义摘要。
+    assert zero["definition_digest"] == one["definition_digest"]
+
+    seen = _install_plan_recorder(monkeypatch)
+    run_id = client.post("/v1/cases/legacy-zero/run", json={}).json()["run_id"]
+    after = _await_case(client, "legacy-zero")
+
+    assert [item["from_seq"] for item in seen] == [1], "实际执行必须从第 1 步开始"
+    assert client.get(f"/v1/runs/{run_id}").json()["run"]["replay_from_seq"] == 1
+    # 记下来的就是实际用的那一步：与用例自己的定义一致，不会平白多出一句「换了一版定义」。
+    assert after["last_definition_digest"] == after["definition_digest"]
+    assert after["last_definition_digest"] == zero["definition_digest"]
+    assert after["last_definition_overrides"] is None
+
+
+def test_a_blank_override_is_not_recorded_as_an_override(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空串在上游一律等于「没给」：记成覆盖等于把「什么都没覆盖」写成「覆盖了模型」。
+
+    同类检查的产物（审核要求逐维度看「记录值 ≠ 实际执行值」）。执行层本来就是「有值才用父 Run 的
+    模型」「工厂里有值才用默认 Prompt」，因此空串从来没有**生效过**；把它记成覆盖，只会让摘要
+    描述一次不存在的覆盖。
+    """
+
+    client.post("/v1/ingest", json=make_run(model="parent-model"))
+    created = client.post(
+        "/v1/cases",
+        json={
+            "name": "空串覆盖的用例",
+            "source_run_id": "run-1",
+            "model": "case-model-x",
+            "assertions": [{"type": "no_error"}],
+        },
+    ).json()
+
+    seen = _install_plan_recorder(monkeypatch)
+    run_id = client.post(
+        f"/v1/cases/{created['id']}/run", json={"model": "", "system_prompt": ""}
+    ).json()["run_id"]
+    after = _await_case(client, created["id"])
+
+    # 实际用的是**用例自己的**模型（空串没有覆盖掉它），也不是父 Run 的模型。
+    assert [item["model"] for item in seen] == ["case-model-x"]
+    assert client.get(f"/v1/runs/{run_id}").json()["run"]["model"] == "case-model-x"
+    # 空串 system_prompt 也不该把这次执行顶成回归模式（它没有生效）。
+    assert seen[0]["model_call_mode"] == "recorded"
+    # 因此记下来的覆盖是「没有覆盖」，摘要与用例定义一致。
+    assert after["last_definition_overrides"] is None
+    assert after["last_definition_digest"] == after["definition_digest"]
+
+
+def test_an_unrecognised_stored_preset_is_recorded_as_not_specified(
+    client: Any, make_run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """认不出的模式名（老数据 / 手工写库）读作「没指定」：记录与执行都是复现语义。
+
+    用例自身的 preset 走同一条归一化：认不出时执行退回复现，摘要若照抄那个名字，就会出现
+    「行里写着 REGRESS、实际按复现跑」。
+    """
+
+    from afr_server.db import session_scope
+    from afr_server.tables import CaseTable
+
+    client.post("/v1/ingest", json=make_run())
+    with session_scope() as session:
+        for case_id, preset in (("legacy-preset", "REGRESS"), ("legacy-none", None)):
+            session.add(
+                CaseTable(
+                    id=case_id,
+                    name=f"模式 {preset}",
+                    source_run_id="run-1",
+                    from_seq=1,
+                    assertions=[{"type": "no_error"}],
+                    labels={},
+                    effect_policy={"preset": preset, "policy": None, "model": None, "system_prompt": None},
+                )
+            )
+
+    assert (
+        client.get("/v1/cases/legacy-preset").json()["definition_digest"]
+        == client.get("/v1/cases/legacy-none").json()["definition_digest"]
+    )
+
+    seen = _install_plan_recorder(monkeypatch)
+    client.post("/v1/cases/legacy-preset/run", json={})
+    after = _await_case(client, "legacy-preset")
+
+    # 复现语义（模型调用走录制结果），并且记录里没有那个认不出的名字。
+    assert seen[0]["model_call_mode"] == "recorded"
+    assert after["last_definition_digest"] == after["definition_digest"]
+    assert after["last_definition_overrides"] is None
+
+
+# ------------------------------------------------------------------ 存量数据
+# ------------------------------------------------------------------ 请求边界：值必须真的生效
+
+
+def _run_total(client: Any) -> int:
+    """此刻库里有多少条 Run。用来证明「被拒的请求没有偷偷跑起来」。"""
+
+    return int(client.get("/v1/runs?limit=1").json()["total"])
+
+
+def test_the_run_request_rejects_a_start_below_one(client: Any, make_run: Any) -> None:
+    """`from_seq < 1` 在边界上就是 422：0 不是「第 0 步」，它也从来不曾按调用方的意思执行过。
+
+    审核实测过这条：HTTP 200、实际从第 1 步回放，而摘要记的是第 0 步那一版——保存的有效定义
+    与实际执行的不是同一份。边界拒掉之后这种错位根本产生不了；老库里已经存着的取值由
+    `normalized` 负责让记录与执行一致（见下一条）。
+    """
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={"name": "起点用例", "source_run_id": "run-1", "assertions": [{"type": "no_error"}]},
+    ).json()
+    assert created["from_seq"] == 1
+    before = _run_total(client)
+
+    for bad in (0, -3):
+        response = client.post(f"/v1/cases/{created['id']}/run", json={"from_seq": bad})
+        assert response.status_code == 422, f"from_seq={bad} 应当被拒：{response.text}"
+    # 被拒的请求没有跑起来，也没有留下任何前提。
+    assert _run_total(client) == before
+    untouched = client.get(f"/v1/cases/{created['id']}").json()
+    assert untouched["last_definition_overrides"] is None
+    assert untouched["last_definition_digest"] is None
+
+    # 同一个约束在创建与更新上也成立：起点是 1 起的，与运行入口一致（不给「先写进去、再跑不成」
+    # 留一条路）。
+    assert client.post(
+        "/v1/cases",
+        json={"name": "起点用例 2", "source_run_id": "run-1", "from_seq": 0},
+    ).status_code == 422
+    assert client.patch(f"/v1/cases/{created['id']}", json={"from_seq": 0}).status_code == 422
+    # 合法取值照旧：1 就是边界那一侧，允许。
+    assert client.patch(f"/v1/cases/{created['id']}", json={"from_seq": 1}).status_code == 200
+
+
+def test_an_unknown_field_is_rejected_at_the_route(client: Any, make_run: Any) -> None:
+    """拼错的键在**路由**上就是 422，而不是被静默丢掉、让这次运行不是调用方要的那一次。
+
+    审核实测：fromSeq 那种 camelCase 拼写返回 200、实际仍从原起点回放、覆盖为空——调用方无从
+    知道请求没有按其意图执行。helper 里的未知键保护挡不住这一层（字段在到达它之前就被丢掉了），
+    因此必须在请求契约上解决，并用走 HTTP 的用例钉住。
+    """
+
+    client.post("/v1/ingest", json=make_run())
+    created = client.post(
+        "/v1/cases",
+        json={"name": "拼写用例", "source_run_id": "run-1", "assertions": [{"type": "no_error"}]},
+    ).json()
+    before = _run_total(client)
+
+    response = client.post(f"/v1/cases/{created['id']}/run", json={"fromSeq": 2})
+    assert response.status_code == 422, response.text
+    assert "fromSeq" in response.text  # 说清是哪个键不认，而不是一句笼统的 422
+    assert _run_total(client) == before, "被拒的请求不该产生回放 Run"
+    assert client.get(f"/v1/cases/{created['id']}").json()["last_definition_overrides"] is None
+
+    # 创建与更新同样是「多给字段就是错」。PATCH 尤其重要：静默丢掉一个拼错的键，会让这次更新
+    # 变成一次**什么都没改**的 200——调用方以为改了，实际一行没动。
+    assert client.post(
+        "/v1/cases",
+        json={"name": "拼写用例 2", "source_run_id": "run-1", "fromseqq": 3},
+    ).status_code == 422
+    assert client.patch(f"/v1/cases/{created['id']}", json={"fromseqq": 3}).status_code == 422
+    assert client.get(f"/v1/cases/{created['id']}").json()["from_seq"] == created["from_seq"]
+
 
 def test_a_batch_from_before_versioning_reads_back_as_having_no_version(client, make_run) -> None:
     """版本化之前创建的批次照样读得出来，缺版本时如实显示「无版本记录」。"""

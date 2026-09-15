@@ -15,7 +15,7 @@ from agent_flight_recorder.models import (
 )
 from agent_flight_recorder.replay.reasons import InconclusiveReason
 from agent_flight_recorder.replay.budget import BudgetUsage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .assertions import AssertionResult, AssertionSpec
 from .case_versions import CANONICALIZATION, definition_digest_of_case
@@ -84,10 +84,16 @@ class ReplayResponse(BaseModel):
 
 
 class CaseCreateRequest(BaseModel):
+    #: 多给字段就是错：静默丢掉一个拼错的键，等于让这次提交**不是调用方要的那一次**，
+    #: 而调用方从 200 里看不出来（审核实测：`{"fromSeq": 2}` 被丢掉，实际没覆盖）。
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     description: str = ""
     source_run_id: str
-    from_seq: int | None = None
+    #: 步号是 1 起的。0 / 负数没有意义，也从来不曾按调用方的意思执行过（计划一直读作 1），
+    #: 因此边界直接拒掉，而不是让「记 0、跑 1」这种错位有机会产生。
+    from_seq: int | None = Field(default=None, ge=1)
     to_seq: int | None = None
     assertions: list[AssertionSpec] = Field(default_factory=list)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -140,7 +146,10 @@ class CaseListResponse(BaseModel):
 
 
 class CaseRunRequest(BaseModel):
-    from_seq: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    #: 同上：`< 1` 当场 422。与 `ReplayRequest.from_seq`（一直有 `ge=1`）保持一致。
+    from_seq: int | None = Field(default=None, ge=1)
     preset: ReplayPreset | None = None
     #: 这一次执行的硬上限。不给就是不设上限（行为与之前一致）。
     budget: ReplayBudget | None = None
@@ -161,10 +170,14 @@ class CaseUpdateRequest(BaseModel):
     `last_*` 这类执行记账：那些字段属于「跑出来的结果」，不该被外部改写。
     """
 
+    #: 与创建/运行一致：多给字段 = 422。否则一个拼错的键会让这次 PATCH 变成**什么都没改**的
+    #: 200——调用方以为改了，实际一行都没动。
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     description: str | None = None
     source_run_id: str | None = None
-    from_seq: int | None = None
+    from_seq: int | None = Field(default=None, ge=1)
     to_seq: int | None = None
     assertions: list[AssertionSpec] | None = None
     labels: dict[str, str] | None = None

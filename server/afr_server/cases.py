@@ -34,6 +34,7 @@ from .assertions import AssertionSpec, evaluate_assertions
 from .case_versions import (
     definition_digest_of,
     effective_snapshot,
+    normalized,
     run_overrides,
     snapshot_of,
 )
@@ -329,7 +330,6 @@ def _prepare_case_run(
     # 计划在提交前就确定，回放 Run 也因此可以立刻可见，而不是等第一批事件落库。
     plan = resolve_plan(
         effective,
-        policy=policy,
         # 上限只约束这一次执行。整批的上限不在这里：套件层在启动每一格之前把「整批剩余」
         # 作为这一格的额度分下来（见 suites.py），因此这里拿到的额度天然不会越过整批上限。
         budget=budget,
@@ -343,7 +343,6 @@ def _prepare_case_run(
 def resolve_plan(
     snapshot: dict[str, Any],
     *,
-    policy: EffectPolicy | None = None,
     budget: ReplayBudget | None = None,
     labels: dict[str, str] | None = None,
 ) -> ReplayPlan:
@@ -354,22 +353,29 @@ def resolve_plan(
 
     **传进来的必须是有效定义**（已经合并过覆盖的快照，见 `effective_snapshot`）：覆盖不再
     作为这里的一串参数出现，因为「合并过的快照」只有一个来源，而两串参数可以各传各的。
+    这里还会**再归一化一遍**（幂等，见 `normalized`）：计划因此不可能与摘要分家，哪怕调用方
+    递进来的是一份原始用例行（把 `from_seq=0` 记成 0 却从第 1 步跑，就是这么来的）。
+
+    副作用策略也从快照里取（覆盖已经合并进去了），没有独立的 policy 参数：多一条并行通道，
+    就多一次「计划与摘要各说一套」的机会——上一轮那条错误归属正是这么来的。
     """
 
+    effective = normalized(snapshot)
     # 给了新的 system prompt 却没有指定模式时，按回归模式执行。
     # 复现模式完全使用录制结果，模型根本不会跑，换 Prompt 也就没有任何意义。
-    resolved_preset = _preset(snapshot.get("preset"))
-    if snapshot.get("system_prompt") is not None and resolved_preset is None:
+    resolved_preset = _preset(effective.get("preset"))
+    if effective.get("system_prompt") is not None and resolved_preset is None:
         resolved_preset = ReplayPreset.REGRESS
 
     return build_plan(
-        snapshot["source_run_id"],
-        from_seq=snapshot["from_seq"] or 1,
+        effective["source_run_id"],
+        # `or 1` 留着只是最后一道防线：`normalized` 已经把它定下来了（两者同一读法）。
+        from_seq=effective["from_seq"] or 1,
         preset=resolved_preset,
-        policy=policy or _policy(snapshot.get("policy")),
+        policy=_policy(effective.get("policy")),
         budget=budget,
-        model=snapshot.get("model"),
-        system_prompt=snapshot.get("system_prompt"),
+        model=effective.get("model"),
+        system_prompt=effective.get("system_prompt"),
         labels=dict(labels or {}),
     )
 
